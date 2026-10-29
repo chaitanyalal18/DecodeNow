@@ -1,0 +1,1278 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sp_widget">
+    <sp_widget action="INSERT_OR_UPDATE">
+        <category>custom</category>
+        <client_script><![CDATA[api.controller = function($scope, $rootScope, $element, $timeout, $interval, $window) {
+    /* Fun on PDI - Crossword widget (client controller) */
+    var c = this;
+
+    // Game masters signed in at /fun are sent to the console (decided on the server).
+    c.redirecting = !!c.data.redirectTo;
+    if (c.redirecting) {
+        $window.location.replace(c.data.redirectTo);
+        return;
+    }
+
+    var AUTOSAVE_DELAY_MS = 1500;   // save shortly after typing stops
+    var AUTOSAVE_EVERY_MS = 20000;  // safety net in case a save failed
+    var WAIT_POLL_MS = 5000;        // how often a waiting team checks whether the game has started
+    var STATUS_POLL_MS = 10000;     // while playing: notices an End game from the console
+
+    c.game = c.data.game || { ok: false, message: 'Could not load the crossword. Please refresh the page.' };
+    c.tagline = 'Hunt the instance. Crack the clue.';   // shown under the game name
+    c.howtoOpen = true;                                  // 'How to play' starts open
+    c.cells = [];
+    c.cellMap = {};
+    c.words = [];
+    c.across = [];
+    c.down = [];
+    c.sel = null;               // { pos: 'r_c' (display position), dir: 'across' | 'down' }
+    c.locked = false;
+    c.dirty = false;
+    c.saving = false;
+    c.submitting = false;
+    c.confirmOpen = false;
+    c.saveText = '';
+    c.timerText = '';
+    c.remaining = 0;
+    c.resultText = '';
+    c.resultKind = '';
+    c.errorText = '';
+
+    var endAt = 0;
+    var tickTimer = null;
+    var autosaveTimer = null;
+    var autosaveLoop = null;
+    var timeUpSent = false;
+    var waitPoll = null;
+    var statusPoll = null;
+    var statusBusy = false;
+    var waitBusy = false;
+    var initialised = false;
+
+    // First-login team setup
+    c.reg = { name: '', members: ['', ''], saving: false, error: '' };
+
+
+    /* ---------- crisp board at any display scaling ----------
+     * Squares are sized to a whole number of screen pixels and lines are exactly
+     * 1 screen pixel (2 on high-density screens), so every grid line has the same
+     * thickness at 100%, 125%, 150% and 200% Windows/browser scaling. */
+    var BOARD_MAX_CELL = 35;   // CSS px at 100%
+    var BOARD_SIDE_SPACE = 64; // space the page needs around the board on small screens
+    c.cellPx = BOARD_MAX_CELL;
+    c.linePx = 1;
+    c.padPx = 10;
+
+    function sizeBoard() {
+        var cols = c.cols;
+        if (!cols) return;
+        var dpr = $window.devicePixelRatio || 1;
+        var target = Math.min(BOARD_MAX_CELL, ($window.innerWidth - BOARD_SIDE_SPACE) / cols);
+        c.cellPx = Math.max(12, Math.floor(target * dpr)) / dpr;
+        c.linePx = Math.max(1, Math.round(dpr)) / dpr;
+        c.padPx = Math.round(10 * dpr) / dpr;
+    }
+
+    c.boardStyle = function() {
+        var px = function(v) { return (Math.round(v * 10000) / 10000) + 'px'; };
+        var cell = c.cellPx, line = c.linePx, pad = c.padPx;
+        // Everything is pre-computed here: the portal's SCSS compiler mangles calc() with
+        // CSS variable fallbacks, so the CSS only reads these plain values.
+        return '--cols: ' + c.cols +
+            '; --cell: ' + px(cell) +
+            '; --overlap: -' + px(line) +           // frame reaches one line into the next square
+            '; --line: ' + px(line) +
+            '; --pad: ' + px(pad) +
+            '; --pad-end: ' + px(pad + line) +
+            '; --num: ' + px(cell * 0.27) +
+            '; --letter: ' + px(cell * 0.56);
+    };
+
+    var onResize = function() { $scope.$applyAsync(sizeBoard); };
+    angular.element($window).on('resize', onResize);
+    $scope.$on('$destroy', function() { angular.element($window).off('resize', onResize); });
+
+    if (c.game.ok && c.game.waiting) startWaiting();
+    if (c.game.ok && !c.game.needsRegistration && !c.game.waiting && !c.game.ended) init();
+    if (c.game.ok && c.game.needsRegistration) {
+        $timeout(function() {
+            var el = $element[0].querySelector('#fun-reg-name');
+            if (el) el.focus();
+        });
+    }
+
+    /* ---------------- team setup (first login) ---------------- */
+
+    c.addMember = function() {
+        if (c.reg.members.length >= 8) return;
+        c.reg.members.push('');
+        var idx = c.reg.members.length - 1;
+        $timeout(function() {
+            var el = $element[0].querySelector('#fun-member-' + idx);
+            if (el) el.focus();
+        });
+    };
+
+    c.removeMember = function(i) {
+        if (c.reg.members.length > 1) c.reg.members.splice(i, 1);
+    };
+
+    c.registerTeam = function() {
+        var name = String(c.reg.name || '').replace(/\s+/g, ' ').trim();
+        var members = c.reg.members
+            .map(function(m) { return String(m || '').replace(/\s+/g, ' ').trim(); })
+            .filter(function(m) { return m; });
+
+        if (name.length < 2) { c.reg.error = 'Enter a team name of at least 2 characters.'; return; }
+        if (!members.length) { c.reg.error = 'Add at least one team member.'; return; }
+
+        c.reg.saving = true;
+        c.reg.error = '';
+        c.server.get({ action: 'register', teamName: name, members: members }).then(function(resp) {
+            var res = resp.data.result;
+            if (!res || !res.ok) {
+                c.reg.saving = false;
+                c.reg.error = (res && res.message) || 'Could not save your team. Please try again.';
+                return;
+            }
+            $rootScope.$broadcast('fun.teamRegistered', res.team); // updates the header
+            c.server.get({ action: 'refresh' }).then(function(r2) {
+                c.reg.saving = false;
+                var g = r2.data.result;
+                if (g && g.ok && g.waiting) {
+                    c.game = g;
+                    startWaiting();
+                } else if (g && g.ok && g.ended) {
+                    c.game = g;
+                } else if (g && g.ok && !g.needsRegistration) {
+                    c.game = g;
+                    init();
+                } else {
+                    c.reg.error = (g && g.message) || 'Your team was saved. Please refresh the page to start.';
+                }
+            });
+        }, function() {
+            c.reg.saving = false;
+            c.reg.error = 'Could not reach the server. Please try again.';
+        });
+    };
+
+    /* ---------------- waiting for the game to start ---------------- */
+
+    function startWaiting() {
+        if (waitPoll) return;
+        waitPoll = $interval(function() {
+            if (waitBusy) return;
+            waitBusy = true;
+            c.server.get({ action: 'refresh' }).then(function(resp) {
+                waitBusy = false;
+                var g = resp.data.result;
+                if (g && g.ok && g.ended) {
+                    $interval.cancel(waitPoll);
+                    waitPoll = null;
+                    c.game = g;
+                } else if (g && g.ok && !g.waiting && !g.needsRegistration) {
+                    $interval.cancel(waitPoll);
+                    waitPoll = null;
+                    c.game = g;
+                    init();
+                }
+            }, function() { waitBusy = false; });
+        }, WAIT_POLL_MS);
+    }
+
+    /* ---------------- setup ---------------- */
+
+    function init() {
+        if (initialised) return;
+        initialised = true;
+        var g = c.game;
+        c.rows = g.puzzle.rows;
+        c.cols = g.puzzle.cols;
+
+        // Show only the area the words use, plus a 1-square margin, so there is no empty
+        // space above or below. Display positions are shifted; saved keys keep the
+        // original row_col from Puzzle Word.
+        var minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+        g.words.forEach(function(w) {
+            var endR = w.direction == 'down' ? w.row + w.length - 1 : w.row;
+            var endC = w.direction == 'across' ? w.col + w.length - 1 : w.col;
+            minR = Math.min(minR, w.row); maxR = Math.max(maxR, endR);
+            minC = Math.min(minC, w.col); maxC = Math.max(maxC, endC);
+        });
+        var MARGIN = 1, offR = 0, offC = 0;
+        if (g.words.length) {
+            c.rows = (maxR - minR + 1) + 2 * MARGIN;
+            c.cols = (maxC - minC + 1) + 2 * MARGIN;
+            offR = MARGIN - minR;
+            offC = MARGIN - minC;
+        }
+
+        c.posMap = {};
+        for (var r = 0; r < c.rows; r++) {
+            for (var col = 0; col < c.cols; col++) {
+                var cell = { pos: r + '_' + col, key: null, r: r, c: col, active: false, number: null, letter: '', across: null, down: null };
+                c.cells.push(cell);
+                c.posMap[cell.pos] = cell;
+            }
+        }
+
+        g.words.forEach(function(w) {
+            w.cells = [];
+            for (var i = 0; i < w.length; i++) {
+                var or = w.direction == 'across' ? w.row : w.row + i;
+                var oc = w.direction == 'across' ? w.col + i : w.col;
+                var cell = c.posMap[(or + offR) + '_' + (oc + offC)];
+                if (!cell) continue; // outside the grid; validatePuzzle() reports this
+                cell.active = true;
+                cell.key = or + '_' + oc;
+                c.cellMap[cell.key] = cell;
+                cell[w.direction] = w;
+                w.cells.push(cell);
+            }
+            var start = c.posMap[(w.row + offR) + '_' + (w.col + offC)];
+            if (start) start.number = w.number;
+            (w.direction == 'across' ? c.across : c.down).push(w);
+        });
+
+        sizeBoard();
+        c.words = g.words;
+        c.activeCells = c.cells.filter(function(x) { return x.active; });
+        c.totalCells = c.activeCells.length;
+
+        applySession(g.session, true);
+
+        if (!c.locked) {
+            var first = c.across[0] || c.down[0];
+            if (first) select(firstEmptyCell(first), first.direction, false);
+            autosaveLoop = $interval(function() { if (c.dirty) save(); }, AUTOSAVE_EVERY_MS);
+            statusPoll = $interval(checkStatus, STATUS_POLL_MS);
+        }
+        tickTimer = $interval(updateTimer, 1000);
+        updateTimer();
+        // Header shows "Open ServiceNow Platform" only while this team is playing.
+        $rootScope.$broadcast('fun.gameState', c.locked ? 'stopped' : 'running');
+    }
+
+    /** Applies a session from the server. Letters are only overwritten on first load or once submitted. */
+    function applySession(s, initial) {
+        if (!s) return;
+        if (initial || s.status == 'submitted') {
+            var cells = s.cells || {};
+            c.activeCells.forEach(function(cell) { cell.letter = cells[cell.key] || ''; });
+        }
+        if (s.status == 'submitted') {
+            lock(s);
+        } else {
+            endAt = Date.now() + (s.remainingSeconds || 0) * 1000;
+        }
+    }
+
+    function lock(s) {
+        c.locked = true;
+        $rootScope.$broadcast('fun.gameState', 'stopped');
+        c.sel = null;
+        c.confirmOpen = false;
+        c.dirty = false;
+        c.errorText = '';
+        cancelAutosave();
+        if (autosaveLoop) { $interval.cancel(autosaveLoop); autosaveLoop = null; }
+        if (statusPoll) { $interval.cancel(statusPoll); statusPoll = null; }
+        if (s.submitType == 'auto') {
+            c.resultKind = 'warn';
+            c.resultText = "Time's up! Your crossword was submitted automatically after " + s.timeTakenText + '.';
+            c.timerText = '00:00';
+        } else if (s.submitType == 'ended') {
+            c.resultKind = 'warn';
+            c.resultText = 'The game has ended. Your crossword was submitted after ' + s.timeTakenText + '.';
+            c.timerText = 'Ended';
+        } else {
+            c.resultKind = 'ok';
+            c.resultText = 'Submitted! You completed the crossword in ' + s.timeTakenText + '.';
+            c.timerText = 'Done';
+        }
+    }
+
+    /** While playing: picks up an End game from the console, and keeps the timer in sync. */
+    function checkStatus() {
+        if (c.locked || statusBusy || c.submitting) return;
+        statusBusy = true;
+        c.server.get({ action: 'refresh' }).then(function(resp) {
+            statusBusy = false;
+            var g = resp.data.result;
+            if (!g || !g.ok) return;
+            if (g.ended) { lock({ submitType: 'ended', timeTakenText: '' }); c.game = g; return; }
+            if (g.session) applySession(g.session, false);
+        }, function() { statusBusy = false; });
+    }
+
+    /* ---------------- timer ---------------- */
+
+    function updateTimer() {
+        if (c.locked) return;
+        c.remaining = Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
+        c.timerText = formatClock(c.remaining);
+        if (c.remaining <= 0 && !timeUpSent) {
+            timeUpSent = true;
+            doSubmit(true);
+        }
+    }
+
+    function formatClock(sec) {
+        var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+        var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+        return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s);
+    }
+
+    c.timerClass = function() {
+        if (c.locked) return 'is-done';
+        if (c.remaining <= 60) return 'is-critical';
+        if (c.remaining <= 300) return 'is-low';
+        return '';
+    };
+
+    /* ---------------- selection ---------------- */
+
+    c.currentWord = function() {
+        if (!c.sel) return null;
+        var cell = c.posMap[c.sel.pos];
+        return cell ? (cell[c.sel.dir] || cell.across || cell.down) : null;
+    };
+
+    c.dirLabel = function(dir) { return dir == 'across' ? 'Across' : 'Down'; };
+
+    c.cellClass = function(cell) {
+        if (!cell.active) return 'is-block';
+        var cls = '';
+        var w = c.currentWord();
+        if (w && cell[w.direction] === w) cls += ' in-word';
+        if (c.sel && c.sel.pos == cell.pos) cls += ' is-active';
+        return cls;
+    };
+
+    function select(cell, dir, focus) {
+        if (!cell || !cell.active) return;
+        var d = cell[dir] ? dir : (cell.across ? 'across' : 'down');
+        c.sel = { pos: cell.pos, dir: d };
+        if (focus !== false) focusCell(cell);
+    }
+
+    function focusCell(cell) {
+        $timeout(function() {
+            var el = $element[0].querySelector('#fun-cell-' + cell.pos);
+            if (el) {
+                el.focus();
+                if (el.setSelectionRange) el.setSelectionRange(0, el.value.length);
+            }
+        });
+    }
+
+    function firstEmptyCell(w) {
+        for (var i = 0; i < w.cells.length; i++) if (!w.cells[i].letter) return w.cells[i];
+        return w.cells[0];
+    }
+
+    c.onCellClick = function(cell) {
+        if (c.locked) return;
+        if (c.sel && c.sel.pos == cell.pos && cell.across && cell.down) {
+            c.sel.dir = c.sel.dir == 'across' ? 'down' : 'across'; // click again to switch direction
+            return;
+        }
+        select(cell, c.sel ? c.sel.dir : 'across', false);
+    };
+
+    c.selectWord = function(w) {
+        if (c.locked || !w.cells.length) return;
+        select(firstEmptyCell(w), w.direction);
+    };
+
+    /* ---------------- typing ---------------- */
+
+    function ensureSelected(cell) {
+        if (!c.sel || c.sel.pos != cell.pos) select(cell, c.sel ? c.sel.dir : 'across', false);
+    }
+
+    c.onKey = function(e, cell) {
+        if (c.locked) return;
+        ensureSelected(cell);
+        var k = e.key;
+
+        if (k && k.length == 1 && /[a-z]/i.test(k) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            setLetter(cell, k.toUpperCase());
+            stepInWord(cell, 1);
+            return;
+        }
+
+        switch (k) {
+            case 'Backspace':
+                e.preventDefault();
+                if (cell.letter) {
+                    setLetter(cell, '');
+                } else {
+                    var prev = neighbourInWord(cell, -1);
+                    if (prev) { setLetter(prev, ''); select(prev, c.sel.dir); }
+                }
+                return;
+            case 'Delete':
+                e.preventDefault();
+                setLetter(cell, '');
+                return;
+            case 'ArrowRight': e.preventDefault(); moveLine(cell, 0, 1, 'across'); return;
+            case 'ArrowLeft':  e.preventDefault(); moveLine(cell, 0, -1, 'across'); return;
+            case 'ArrowDown':  e.preventDefault(); moveLine(cell, 1, 0, 'down'); return;
+            case 'ArrowUp':    e.preventDefault(); moveLine(cell, -1, 0, 'down'); return;
+            case ' ':
+            case 'Spacebar':
+                e.preventDefault();
+                if (cell.across && cell.down) c.sel.dir = c.sel.dir == 'across' ? 'down' : 'across';
+                return;
+            case 'Tab':
+                e.preventDefault();
+                jumpWord(e.shiftKey ? -1 : 1);
+                return;
+            case 'Enter':
+                e.preventDefault();
+                if (c.allFilled()) c.openConfirm();
+                return;
+        }
+    };
+
+    /** Fallback for mobile keyboards, which often don't report the key in keydown. */
+    c.onInput = function(cell) {
+        if (c.locked) return;
+        ensureSelected(cell);
+        var v = String(cell.letter || '').toUpperCase().replace(/[^A-Z]/g, '');
+        cell.letter = v.slice(-1);
+        markDirty();
+        if (cell.letter) stepInWord(cell, 1);
+    };
+
+    function setLetter(cell, v) {
+        if (cell.letter !== v) {
+            cell.letter = v;
+            markDirty();
+        }
+    }
+
+    function neighbourInWord(cell, delta) {
+        var w = c.currentWord();
+        if (!w) return null;
+        var i = w.cells.indexOf(cell);
+        return i < 0 ? null : (w.cells[i + delta] || null);
+    }
+
+    function stepInWord(cell, delta) {
+        var next = neighbourInWord(cell, delta);
+        if (next) select(next, c.sel.dir);
+    }
+
+    function moveLine(cell, dr, dc, dir) {
+        if (cell[dir] && c.sel.dir != dir) { c.sel.dir = dir; return; } // first press turns, next press moves
+        var r = cell.r + dr, col = cell.c + dc;
+        while (r >= 0 && r < c.rows && col >= 0 && col < c.cols) {
+            var t = c.posMap[r + '_' + col];
+            if (t.active) { select(t, t[dir] ? dir : c.sel.dir); return; }
+            r += dr; col += dc;
+        }
+    }
+
+    function jumpWord(delta) {
+        var list = c.across.concat(c.down);
+        if (!list.length) return;
+        var i = list.indexOf(c.currentWord());
+        var next = list[(i + delta + list.length) % list.length];
+        select(firstEmptyCell(next), next.direction);
+    }
+
+    /* ---------------- progress ---------------- */
+
+    c.isWordFilled = function(w) {
+        for (var i = 0; i < w.cells.length; i++) if (!w.cells[i].letter) return false;
+        return w.cells.length > 0;
+    };
+
+    c.wordsFilled = function() {
+        return c.words.filter(c.isWordFilled).length;
+    };
+
+    c.allFilled = function() {
+        for (var i = 0; i < c.activeCells.length; i++) if (!c.activeCells[i].letter) return false;
+        return c.activeCells.length > 0;
+    };
+
+    function collectCells() {
+        var out = {};
+        c.activeCells.forEach(function(cell) { if (cell.letter) out[cell.key] = cell.letter; });
+        return out;
+    }
+
+    /* ---------------- autosave ---------------- */
+
+    function markDirty() {
+        c.dirty = true;
+        c.saveText = 'Unsaved changes';
+        cancelAutosave();
+        autosaveTimer = $timeout(save, AUTOSAVE_DELAY_MS);
+    }
+
+    function cancelAutosave() {
+        if (autosaveTimer) { $timeout.cancel(autosaveTimer); autosaveTimer = null; }
+    }
+
+    function save() {
+        if (c.locked || c.saving || c.submitting) return;
+        c.saving = true;
+        c.dirty = false;
+        c.saveText = 'Saving…';
+        c.server.get({ action: 'save', cells: collectCells() }).then(function(resp) {
+            c.saving = false;
+            var res = resp.data.result;
+            if (!res || !res.ok) {
+                c.dirty = true;
+                c.saveText = 'Not saved yet, retrying';
+                return;
+            }
+            if (!c.dirty) c.saveText = 'Saved';
+            applySession(res.session, false);
+        }, function() {
+            c.saving = false;
+            c.dirty = true;
+            c.saveText = 'Offline, retrying';
+        });
+    }
+
+    /* ---------------- submit ---------------- */
+
+    c.openConfirm = function() {
+        if (c.locked || !c.allFilled()) return;
+        c.confirmOpen = true;
+    };
+
+    c.closeConfirm = function() { c.confirmOpen = false; };
+
+    c.confirmSubmit = function() {
+        c.confirmOpen = false;
+        doSubmit(false);
+    };
+
+    function doSubmit(isTimeUp) {
+        if (c.locked || c.submitting) return;
+        c.submitting = true;
+        c.errorText = '';
+        cancelAutosave();
+
+        c.server.get({ action: 'submit', cells: collectCells(), isTimeUp: isTimeUp }).then(function(resp) {
+            c.submitting = false;
+            var res = resp.data.result;
+            if (res && res.ok) {
+                applySession(res.session, false);
+                return;
+            }
+            if (isTimeUp) {
+                resync();
+            } else {
+                c.errorText = (res && res.message) || 'Submit failed. Please try again.';
+            }
+        }, function() {
+            c.submitting = false;
+            c.errorText = 'Could not reach the server. Check your connection; your answers are still here.';
+            if (isTimeUp) $timeout(function() { timeUpSent = false; }, 5000);
+        });
+    }
+
+    /** Re-reads the session from the server, e.g. if the browser's countdown ran ahead. */
+    function resync() {
+        c.server.get({ action: 'refresh' }).then(function(resp) {
+            var res = resp.data.result;
+            if (res && res.ok) applySession(res.session, false);
+            $timeout(function() { timeUpSent = false; }, 3000);
+        });
+    }
+
+    /* ---------------- cleanup ---------------- */
+
+    $scope.$on('$destroy', function() {
+        if (tickTimer) $interval.cancel(tickTimer);
+        if (autosaveLoop) $interval.cancel(autosaveLoop);
+        if (waitPoll) $interval.cancel(waitPoll);
+        if (statusPoll) $interval.cancel(statusPoll);
+        cancelAutosave();
+    });
+};]]></client_script>
+        <controller_as>c</controller_as>
+        <css>/* Fun on PDI - Crossword widget */&#13;
+.fun-xw {&#13;
+  /* BCE Global Tech palette */&#13;
+  --brand: #00549a;      /* primary blue: lines, buttons, timer */&#13;
+  --brand-dark: #003778; /* clue bar, headings rule */&#13;
+  --ink: #1b2733;        /* text */&#13;
+  --paper: #ffffff;      /* letter squares */&#13;
+  --block: #e9eff6;      /* unused squares, light blue-grey */&#13;
+  --word: #d3e5f7;       /* selected word */&#13;
+  --cursor: #00549a;     /* selected square */&#13;
+  --accent: #00549a;&#13;
+  --amber: #a86400;&#13;
+  --red: #b3261e;&#13;
+  --muted: #5b6878;&#13;
+  --surface: #f2f6fa;&#13;
+  /* board defaults; the client controller overrides them on the board in exact px */&#13;
+  --cols: 15;&#13;
+  --cell: 35px;&#13;
+  --line: 1px;&#13;
+  --pad: 10px;&#13;
+  --pad-end: 11px;&#13;
+  --num: 9.5px;&#13;
+  --letter: 19.6px;&#13;
+&#13;
+  max-width: 980px;&#13;
+  margin: 0 auto;&#13;
+  padding: 16px 12px 40px;&#13;
+  color: var(--ink);&#13;
+}&#13;
+&#13;
+/* ---------- header ---------- */&#13;
+.fun-head {&#13;
+  display: flex;&#13;
+  justify-content: space-between;&#13;
+  align-items: flex-end;&#13;
+  gap: 16px;&#13;
+  flex-wrap: wrap;&#13;
+  padding-bottom: 12px;&#13;
+  border-bottom: 3px solid var(--brand);&#13;
+  margin-bottom: 16px;&#13;
+}&#13;
+.fun-title h1 {&#13;
+  margin: 0;&#13;
+  font-size: 28px;&#13;
+  font-weight: 800;&#13;
+  line-height: 1.1;&#13;
+}&#13;
+.fun-title p {&#13;
+  margin: 4px 0 0;&#13;
+  color: var(--brand);&#13;
+  font-size: 16px;&#13;
+  font-weight: 700;&#13;
+  letter-spacing: 0.02em;&#13;
+}&#13;
+.fun-status {&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  gap: 12px;&#13;
+}&#13;
+.fun-save {&#13;
+  font-size: 13px;&#13;
+  color: var(--muted);&#13;
+}&#13;
+.fun-timer {&#13;
+  font-variant-numeric: tabular-nums;&#13;
+  font-size: 26px;&#13;
+  font-weight: 800;&#13;
+  padding: 4px 14px;&#13;
+  border: 2px solid var(--accent);&#13;
+  border-radius: 6px;&#13;
+  color: var(--accent);&#13;
+  min-width: 96px;&#13;
+  text-align: center;&#13;
+}&#13;
+.fun-timer.is-low { color: var(--amber); border-color: var(--amber); }&#13;
+.fun-timer.is-critical { color: #fff; background: var(--red); border-color: var(--red); }&#13;
+.fun-timer.is-done { color: var(--muted); border-color: #c5ccd3; }&#13;
+&#13;
+/* ---------- messages ---------- */&#13;
+.fun-result,&#13;
+.fun-error {&#13;
+  padding: 14px 16px;&#13;
+  border-radius: 6px;&#13;
+  font-size: 16px;&#13;
+  font-weight: 700;&#13;
+  margin-bottom: 16px;&#13;
+}&#13;
+.fun-result.is-ok { background: #e3f4ea; color: #0f5a37; border: 1px solid #9fd3b5; }&#13;
+.fun-result.is-warn { background: #fff3dc; color: #7a4a00; border: 1px solid #f0c977; }&#13;
+.fun-error { background: #fbe9e8; color: var(--red); border: 1px solid #efb3ae; font-weight: 600; }&#13;
+&#13;
+.fun-empty {&#13;
+  max-width: 520px;&#13;
+  margin: 60px auto;&#13;
+  padding: 24px;&#13;
+  border: 2px solid var(--brand);&#13;
+  border-radius: 8px;&#13;
+}&#13;
+.fun-empty h2 { margin-top: 0; font-size: 20px; }&#13;
+&#13;
+/* ---------- current clue bar ---------- */&#13;
+/* the selected clue stays pinned to the top of the screen while scrolling */&#13;
+.fun-current {&#13;
+  position: sticky;&#13;
+  top: 0;&#13;
+  z-index: 10;&#13;
+  box-shadow: 0 4px 10px rgba(0, 55, 120, 0.25);&#13;
+  display: flex;&#13;
+  gap: 10px;&#13;
+  align-items: baseline;&#13;
+  background: var(--brand-dark);&#13;
+  color: #fff;&#13;
+  padding: 10px 14px;&#13;
+  border-radius: 6px;&#13;
+  margin: 0 auto 12px;&#13;
+  font-size: 15px;&#13;
+}&#13;
+.fun-current-ref { font-weight: 800; white-space: nowrap; color: #9fd0ff; }&#13;
+&#13;
+/* ---------- grid ---------- */&#13;
+.fun-board-wrap {&#13;
+  display: flex;&#13;
+  justify-content: center;&#13;
+  overflow-x: auto;&#13;
+  padding: 2px;&#13;
+}&#13;
+.fun-board {&#13;
+  position: relative;&#13;
+  z-index: 0;              /* keeps the square frames below the pinned clue bar */&#13;
+  display: grid;&#13;
+  grid-template-columns: repeat(var(--cols, 15), var(--cell, 35px));&#13;
+  grid-auto-rows: var(--cell, 35px);&#13;
+  background: #e9eff6;&#13;
+  border-radius: 8px;&#13;
+  padding: var(--pad, 10px) var(--pad-end, 11px) var(--pad-end, 11px) var(--pad, 10px);&#13;
+}&#13;
+.fun-cell {&#13;
+  position: relative;&#13;
+  background: var(--block);&#13;
+}&#13;
+/* letter squares: each square fills its grid slot exactly. Its border is a separate&#13;
+   frame (::after) that reaches one line past the right and bottom edges and is drawn&#13;
+   above every square, so neighbouring squares share one line in the same place.&#13;
+   All sizes are plain values set by the client controller (no calc), whole screen pixels. */&#13;
+.fun-cell:not(.is-block) {&#13;
+  background: var(--paper);&#13;
+}&#13;
+.fun-cell:not(.is-block)::after {&#13;
+  content: "";&#13;
+  position: absolute;&#13;
+  top: 0;&#13;
+  left: 0;&#13;
+  right: var(--overlap, -1px);&#13;
+  bottom: var(--overlap, -1px);&#13;
+  border: var(--line, 1px) solid var(--brand);&#13;
+  pointer-events: none;&#13;
+  z-index: 1;&#13;
+}&#13;
+.fun-cell.in-word { background: var(--word); }&#13;
+.fun-cell.is-active { background: var(--cursor); }&#13;
+.fun-cell.is-active .fun-input,&#13;
+.fun-cell.is-active .fun-num { color: #fff; }&#13;
+&#13;
+.fun-num {&#13;
+  position: absolute;&#13;
+  z-index: 2;&#13;
+  top: 1px;&#13;
+  left: 2px;&#13;
+  font-size: var(--num, 9px);&#13;
+  line-height: 1;&#13;
+  font-weight: 700;&#13;
+  pointer-events: none;&#13;
+}&#13;
+.fun-input {&#13;
+  width: 100%;&#13;
+  height: 100%;&#13;
+  border: 0;&#13;
+  padding: 0;&#13;
+  margin: 0;&#13;
+  background: transparent;&#13;
+  text-align: center;&#13;
+  text-transform: uppercase;&#13;
+  font-size: var(--letter, 20px);&#13;
+  font-weight: 800;&#13;
+  color: var(--ink);&#13;
+  caret-color: transparent;&#13;
+  cursor: pointer;&#13;
+  border-radius: 0;&#13;
+}&#13;
+.fun-input:focus { outline: none; }&#13;
+.fun-input:disabled { cursor: default; color: var(--ink); opacity: 1; -webkit-text-fill-color: var(--ink); }&#13;
+&#13;
+/* ---------- actions ---------- */&#13;
+.fun-actions {&#13;
+  display: flex;&#13;
+  flex-direction: column;&#13;
+  align-items: center;&#13;
+  gap: 8px;&#13;
+  margin: 18px 0 8px;&#13;
+}&#13;
+.fun-progress { margin: 0; font-weight: 700; }&#13;
+.fun-hint { margin: 0; color: var(--muted); font-size: 14px; }&#13;
+.fun-info {&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  gap: 10px;&#13;
+  padding: 10px 14px;&#13;
+  border-radius: 6px;&#13;
+  background: #e6f0fa;&#13;
+  border: 1px solid #b7d3ee;&#13;
+  color: var(--brand-dark);&#13;
+  font-size: 14px;&#13;
+  font-weight: 600;&#13;
+}&#13;
+.fun-info-icon {&#13;
+  flex: none;&#13;
+  width: 20px;&#13;
+  height: 20px;&#13;
+  border-radius: 50%;&#13;
+  background: var(--brand);&#13;
+  color: #fff;&#13;
+  font: italic 700 13px/20px Georgia, "Times New Roman", serif;&#13;
+  text-align: center;&#13;
+}&#13;
+&#13;
+.fun-submit,&#13;
+.fun-secondary {&#13;
+  font-size: 16px;&#13;
+  font-weight: 700;&#13;
+  padding: 10px 22px;&#13;
+  border-radius: 6px;&#13;
+  cursor: pointer;&#13;
+}&#13;
+.fun-submit {&#13;
+  background: var(--accent);&#13;
+  color: #fff;&#13;
+  border: 2px solid var(--accent);&#13;
+}&#13;
+.fun-submit:hover { background: var(--brand-dark); border-color: var(--brand-dark); }&#13;
+.fun-submit[disabled] { opacity: 0.6; cursor: default; }&#13;
+.fun-secondary {&#13;
+  background: #fff;&#13;
+  color: var(--ink);&#13;
+  border: 2px solid #c5ccd3;&#13;
+}&#13;
+.fun-submit:focus-visible,&#13;
+.fun-secondary:focus-visible,&#13;
+.fun-clues li:focus-visible {&#13;
+  outline: 3px solid #9fd0ff;&#13;
+  outline-offset: 2px;&#13;
+}&#13;
+&#13;
+/* ---------- clues ---------- */&#13;
+.fun-howto {&#13;
+  margin: 0 0 16px;&#13;
+  background: var(--surface);&#13;
+  border-left: 4px solid var(--brand);&#13;
+  border-radius: 4px;&#13;
+}&#13;
+.fun-howto-toggle {&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  justify-content: space-between;&#13;
+  width: 100%;&#13;
+  background: none;&#13;
+  border: 0;&#13;
+  padding: 12px 16px;&#13;
+  font-size: 16px;&#13;
+  font-weight: 800;&#13;
+  color: var(--brand-dark);&#13;
+  cursor: pointer;&#13;
+  text-align: left;&#13;
+}&#13;
+.fun-howto-toggle:focus-visible { outline: 3px solid #9fd0ff; outline-offset: -3px; }&#13;
+.fun-chevron {&#13;
+  width: 10px;&#13;
+  height: 10px;&#13;
+  border-right: 2px solid var(--brand);&#13;
+  border-bottom: 2px solid var(--brand);&#13;
+  transform: rotate(45deg);&#13;
+  margin-top: -4px;&#13;
+  transition: transform 0.2s;&#13;
+}&#13;
+.fun-chevron.is-open { transform: rotate(-135deg); margin-top: 4px; }&#13;
+@media (prefers-reduced-motion: reduce) { .fun-chevron { transition: none; } }&#13;
+.fun-howto-list { margin: 0; padding: 0 16px 14px 36px; }&#13;
+.fun-howto-list li { margin-bottom: 8px; line-height: 1.45; }&#13;
+.fun-howto-list li:last-child { margin-bottom: 0; }&#13;
+.fun-howto-list strong { color: var(--brand-dark); }&#13;
+.fun-clues {&#13;
+  display: grid;&#13;
+  grid-template-columns: 1fr 1fr;&#13;
+  gap: 24px;&#13;
+  margin-top: 16px;&#13;
+  padding-top: 16px;&#13;
+  border-top: 3px solid var(--brand);&#13;
+}&#13;
+.fun-clue-col h2 {&#13;
+  font-size: 18px;&#13;
+  font-weight: 800;&#13;
+  margin: 0 0 8px;&#13;
+}&#13;
+.fun-clue-col ol { list-style: none; margin: 0; padding: 0; }&#13;
+.fun-clue-col li {&#13;
+  display: flex;&#13;
+  gap: 10px;&#13;
+  padding: 6px 8px;&#13;
+  border-radius: 4px;&#13;
+  cursor: pointer;&#13;
+  line-height: 1.4;&#13;
+}&#13;
+.fun-clue-col li:hover { background: var(--surface); }&#13;
+.fun-clue-col li.is-current { background: var(--word); }&#13;
+.fun-clue-col li.is-filled { color: var(--muted); }&#13;
+.fun-clue-num { font-weight: 800; min-width: 22px; color: var(--brand); }&#13;
+&#13;
+.fun-keys {&#13;
+  margin-top: 16px;&#13;
+  font-size: 13px;&#13;
+  color: var(--muted);&#13;
+  text-align: center;&#13;
+}&#13;
+&#13;
+/* ---------- locked after submit ---------- */&#13;
+.fun-xw.is-locked .fun-cell.in-word,&#13;
+.fun-xw.is-locked .fun-cell.is-active { background: var(--paper); }&#13;
+.fun-xw.is-locked .fun-clue-col li { cursor: default; }&#13;
+&#13;
+/* ---------- confirmation ---------- */&#13;
+.fun-backdrop {&#13;
+  position: fixed;&#13;
+  inset: 0;&#13;
+  z-index: 1050;&#13;
+  background: rgba(0, 55, 120, 0.45);&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  justify-content: center;&#13;
+  padding: 16px;&#13;
+}&#13;
+.fun-modal {&#13;
+  background: #fff;&#13;
+  border-radius: 8px;&#13;
+  padding: 22px 24px;&#13;
+  max-width: 420px;&#13;
+  width: 100%;&#13;
+  border-top: 6px solid var(--accent);&#13;
+}&#13;
+.fun-modal h2 { margin: 0 0 8px; font-size: 20px; font-weight: 800; }&#13;
+.fun-modal p { margin: 0 0 18px; color: var(--muted); }&#13;
+.fun-modal-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }&#13;
+&#13;
+/* ---------- small screens ---------- */&#13;
+@media (max-width: 640px) {&#13;
+  .fun-title h1 { font-size: 22px; }&#13;
+  .fun-timer { font-size: 20px; min-width: 80px; }&#13;
+  .fun-clues { grid-template-columns: 1fr; }&#13;
+  .fun-keys { display: none; }&#13;
+}&#13;
+&#13;
+/* ---------- first-login team setup ---------- */&#13;
+.fun-reg-backdrop { background: rgba(0, 55, 120, 0.12); }&#13;
+.fun-reg { max-width: 480px; border-top-color: var(--brand); }&#13;
+.fun-reg p { color: var(--ink); }&#13;
+.fun-label {&#13;
+  display: block;&#13;
+  font-size: 14px;&#13;
+  font-weight: 700;&#13;
+  margin: 14px 0 6px;&#13;
+  padding: 0;&#13;
+  border: 0;&#13;
+}&#13;
+.fun-field {&#13;
+  width: 100%;&#13;
+  font-size: 16px;&#13;
+  padding: 8px 10px;&#13;
+  border: 1px solid #b9c5d2;&#13;
+  border-radius: 4px;&#13;
+  color: var(--ink);&#13;
+}&#13;
+.fun-field:focus { outline: 2px solid #9fd0ff; border-color: var(--brand); }&#13;
+.fun-members { border: 0; padding: 0; margin: 0; min-width: 0; }&#13;
+.fun-member { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }&#13;
+.fun-link {&#13;
+  background: none;&#13;
+  border: 0;&#13;
+  padding: 4px 2px;&#13;
+  color: var(--brand);&#13;
+  font-weight: 700;&#13;
+  cursor: pointer;&#13;
+  white-space: nowrap;&#13;
+}&#13;
+.fun-link:hover { text-decoration: underline; }&#13;
+.fun-reg-note { font-size: 14px; color: var(--muted) !important; margin: 14px 0 12px; }&#13;
+.fun-reg .fun-error { font-size: 14px; }&#13;
+&#13;
+/* ---------- waiting for the game to start ---------- */&#13;
+.fun-wait {&#13;
+  display: flex;&#13;
+  justify-content: center;&#13;
+  padding: 60px 0;&#13;
+}&#13;
+.fun-wait-card {&#13;
+  max-width: 520px;&#13;
+  text-align: center;&#13;
+  padding: 32px 28px;&#13;
+  border-radius: 8px;&#13;
+  background: var(--surface);&#13;
+  border-top: 6px solid var(--brand);&#13;
+}&#13;
+.fun-wait-card h2 { margin: 16px 0 8px; font-size: 24px; font-weight: 800; color: var(--brand-dark); }&#13;
+.fun-wait-card p { margin: 0 0 8px; font-size: 16px; }&#13;
+.fun-wait-note { color: var(--muted); font-size: 14px !important; }&#13;
+.fun-wait-dots { display: inline-flex; gap: 8px; }&#13;
+.fun-wait-dots span {&#13;
+  width: 12px;&#13;
+  height: 12px;&#13;
+  border-radius: 50%;&#13;
+  background: var(--brand);&#13;
+  animation: fun-pulse 1.2s infinite ease-in-out;&#13;
+}&#13;
+.fun-wait-dots span:nth-child(2) { animation-delay: 0.2s; }&#13;
+.fun-wait-dots span:nth-child(3) { animation-delay: 0.4s; }&#13;
+@keyframes fun-pulse {&#13;
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }&#13;
+  40% { opacity: 1; transform: scale(1); }&#13;
+}&#13;
+@media (prefers-reduced-motion: reduce) {&#13;
+  .fun-wait-dots span { animation: none; opacity: 0.7; }&#13;
+}</css>
+        <data_table>sp_instance</data_table>
+        <demo_data/>
+        <description/>
+        <docs/>
+        <field_list/>
+        <has_preview>false</has_preview>
+        <id>fun-crossword</id>
+        <internal>false</internal>
+        <link><![CDATA[function link(scope, element, attrs, controller) {
+  
+}]]></link>
+        <name>Fun Crossword</name>
+        <option_schema/>
+        <public>false</public>
+        <roles/>
+        <script><![CDATA[(function() {
+    /* Fun on PDI - Crossword widget (server script)
+     * All game logic lives in FunCrosswordService. Answers never reach the browser.
+     *
+     * input.action:
+     *   'save'    -> autosave the grid
+     *   'submit'  -> final submit (input.isTimeUp = true when the countdown hit 0)
+     *   'refresh' -> reload the puzzle and session (re-sync the timer)
+     *   'register'-> first login: save team name and members
+     *   (none)    -> first page load
+     */
+    // Everyone signs in at /fun. Game masters (and admins) are sent on to the console;
+    // players stay here and get the crossword.
+    if (!input && gs.hasRole('x_1802710_fun_on_0.game_master')) {
+        data.redirectTo = '/fun_gm?id=fun_console';
+        return;
+    }
+
+    var svc = new FunCrosswordService();
+    var userId = gs.getUserID();
+
+    if (input && input.action) {
+        if (input.action == 'save') {
+            data.result = svc.saveProgress(userId, input.cells);
+        } else if (input.action == 'submit') {
+            data.result = svc.submit(userId, input.cells, input.isTimeUp === true);
+        } else if (input.action == 'register') {
+            data.result = svc.registerTeam(userId, input.teamName, input.members);
+        } else if (input.action == 'refresh') {
+            data.result = svc.getPuzzleForUser(userId);
+        } else {
+            data.result = { ok: false, message: 'Unknown action.' };
+        }
+        return;
+    }
+
+    data.game = svc.getPuzzleForUser(userId);
+})();]]></script>
+        <servicenow>false</servicenow>
+        <sys_class_name>sp_widget</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-10-14 07:37:44</sys_created_on>
+        <sys_id>961e9a63933b4310ca89f6718bba10f0</sys_id>
+        <sys_mod_count>14</sys_mod_count>
+        <sys_name>Fun Crossword</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sp_widget_961e9a63933b4310ca89f6718bba10f0</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-10-22 10:55:04</sys_updated_on>
+        <template><![CDATA[<div class="fun-xw" ng-class="{'is-locked': c.locked}" ng-if="!c.redirecting">
+
+  <!-- Could not load (no team, no active puzzle, ...) -->
+  <div class="fun-empty" ng-if="!c.redirecting && !c.game.ok">
+    <h2>The crossword isn't available</h2>
+    <p>{{c.game.message}}</p>
+  </div>
+
+  <!-- First login: team name and members. The timer starts after confirming. -->
+  <div class="fun-backdrop fun-reg-backdrop" ng-if="c.game.ok && c.game.needsRegistration">
+    <div class="fun-modal fun-reg" role="dialog" aria-modal="true" aria-labelledby="fun-reg-title">
+      <h2 id="fun-reg-title">Set up your team</h2>
+      <p>You're signed in as <strong>{{c.game.team.name}}</strong>. Choose a team name and add everyone playing at your table.</p>
+
+      <label class="fun-label" for="fun-reg-name">Team name</label>
+      <input id="fun-reg-name" class="fun-field" type="text" maxlength="40" ng-model="c.reg.name"
+             placeholder="e.g. Glide Gliders" autocomplete="off">
+
+      <fieldset class="fun-members">
+        <legend class="fun-label">Team members</legend>
+        <div class="fun-member" ng-repeat="m in c.reg.members track by $index">
+          <input class="fun-field" type="text" maxlength="60" ng-model="c.reg.members[$index]"
+                 id="fun-member-{{$index}}" placeholder="Member {{$index + 1}} name"
+                 aria-label="Member {{$index + 1}} name" autocomplete="off">
+          <button type="button" class="fun-link" ng-if="c.reg.members.length > 1"
+                  ng-click="c.removeMember($index)" aria-label="Remove member {{$index + 1}}">Remove</button>
+        </div>
+        <button type="button" class="fun-link" ng-if="c.reg.members.length < 8" ng-click="c.addMember()">+ Add member</button>
+      </fieldset>
+
+      <p class="fun-reg-note">You can't change these details afterwards.</p>
+      <div class="fun-error" ng-if="c.reg.error" role="alert">{{c.reg.error}}</div>
+
+      <div class="fun-modal-actions">
+        <button type="button" class="fun-submit" ng-click="c.registerTeam()" ng-disabled="c.reg.saving">
+          {{c.reg.saving ? 'Saving…' : 'Confirm and start'}}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The game has ended (team never played, or the page was opened after the end) -->
+  <div class="fun-wait" ng-if="c.game.ok && c.game.ended" role="status">
+    <div class="fun-wait-card">
+      <h2>The game has ended</h2>
+      <p>Thanks for playing {{c.game.puzzle.name}}! Watch the screen for the final results.</p>
+    </div>
+  </div>
+
+  <!-- Registered, waiting for the game master to start the game -->
+  <div class="fun-wait" ng-if="c.game.ok && c.game.waiting" role="status">
+    <div class="fun-wait-card">
+      <div class="fun-wait-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+      <h2>You're all set, {{c.game.team.name}}!</h2>
+      <p>Waiting for the organizers to start the game. The crossword will appear here automatically, so keep this page open.</p>
+    </div>
+  </div>
+
+  <div ng-if="c.game.ok && !c.game.needsRegistration && !c.game.waiting && !c.game.ended">
+
+    <!-- Header: puzzle, team, save state, countdown -->
+    <header class="fun-head">
+      <div class="fun-title">
+        <h1>{{c.game.puzzle.name}}</h1>
+        <p>{{c.tagline}}</p>
+      </div>
+      <div class="fun-status">
+        <span class="fun-save" ng-if="!c.locked" aria-live="polite">{{c.saveText}}</span>
+        <span class="fun-timer" ng-class="c.timerClass()" role="timer" aria-live="off">{{c.timerText}}</span>
+      </div>
+    </header>
+
+    <!-- How to play: right under the title, scrolls away with the page -->
+    <section class="fun-howto" ng-if="!c.locked">
+      <button type="button" class="fun-howto-toggle" ng-click="c.howtoOpen = !c.howtoOpen"
+              aria-expanded="{{c.howtoOpen}}" aria-controls="fun-howto-body">
+        <span>How to play</span>
+        <span class="fun-chevron" ng-class="{'is-open': c.howtoOpen}" aria-hidden="true"></span>
+      </button>
+      <ol id="fun-howto-body" class="fun-howto-list" ng-show="c.howtoOpen">
+        <li><strong>Find the record.</strong> Every clue points to a real record in this instance. Use
+          <em>Open ServiceNow Platform</em> (top right) and the application navigator to find it.</li>
+        <li><strong>Spot the clue.</strong> The clue for the word is hidden in the record starting with ##DecodeNow. Type it into the grid; crossing letters help you check your answers.</li>
+        <li><strong>Fill every square, then submit.</strong> Each correct word scores 1 point, and ties go to the
+          faster team. Submitting is final, and unfinished grids are submitted automatically when time runs out.</li>
+      </ol>
+    </section>
+
+    <!-- Result after submitting -->
+    <div class="fun-result" ng-if="c.resultText" ng-class="'is-' + c.resultKind" role="status">
+      {{c.resultText}}
+    </div>
+
+    <!-- Error message (e.g. submit failed) -->
+    <div class="fun-error" ng-if="c.errorText" role="alert">{{c.errorText}}</div>
+
+    <!-- The clue for the selected word, right above the grid -->
+    <div class="fun-current" ng-if="!c.locked && c.currentWord()">
+      <span class="fun-current-ref">{{c.currentWord().number}} {{c.dirLabel(c.currentWord().direction)}}</span>
+      <span class="fun-current-clue">{{c.currentWord().clue}} ({{c.currentWord().length}})</span>
+    </div>
+
+    <!-- Grid -->
+    <div class="fun-board-wrap">
+      <div class="fun-board" ng-attr-style="{{c.boardStyle()}}" role="grid" aria-label="Crossword grid">
+        <div ng-repeat="cell in c.cells track by cell.pos" class="fun-cell" ng-class="c.cellClass(cell)">
+          <span class="fun-num" ng-if="cell.number">{{cell.number}}</span>
+          <input ng-if="cell.active"
+                 id="fun-cell-{{cell.pos}}"
+                 class="fun-input"
+                 type="text"
+                 ng-model="cell.letter"
+                 ng-change="c.onInput(cell)"
+                 ng-keydown="c.onKey($event, cell)"
+                 ng-click="c.onCellClick(cell)"
+                 ng-disabled="c.locked"
+                 autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+                 aria-label="Row {{cell.r + 1}}, column {{cell.c + 1}}">
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress and Submit -->
+    <div class="fun-actions" ng-if="!c.locked">
+      <p class="fun-progress">{{c.wordsFilled()}} of {{c.words.length}} words filled</p>
+      <button type="button" class="fun-submit" ng-if="c.allFilled()" ng-click="c.openConfirm()" ng-disabled="c.submitting">
+        {{c.submitting ? 'Submitting…' : 'Submit crossword'}}
+      </button>
+      <div class="fun-info" role="note" ng-if="!c.allFilled()">
+        <span class="fun-info-icon" aria-hidden="true">i</span>
+        <span>The Submit button appears when every cell is filled.</span>
+      </div>
+    </div>
+
+    <!-- Clues -->
+    <section class="fun-clues">
+      <div class="fun-clue-col">
+        <h2>Across</h2>
+        <ol>
+          <li ng-repeat="w in c.across track by w.id"
+              ng-class="{'is-current': c.currentWord() === w, 'is-filled': c.isWordFilled(w)}"
+              ng-click="c.selectWord(w)">
+            <span class="fun-clue-num">{{w.number}}</span>
+            <span>{{w.clue}} ({{w.length}})</span>
+          </li>
+        </ol>
+      </div>
+      <div class="fun-clue-col">
+        <h2>Down</h2>
+        <ol>
+          <li ng-repeat="w in c.down track by w.id"
+              ng-class="{'is-current': c.currentWord() === w, 'is-filled': c.isWordFilled(w)}"
+              ng-click="c.selectWord(w)">
+            <span class="fun-clue-num">{{w.number}}</span>
+            <span>{{w.clue}} ({{w.length}})</span>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <p class="fun-keys" ng-if="!c.locked">
+      Type to fill. Arrow keys move, Space switches across/down, Tab jumps to the next clue, Backspace deletes.
+    </p>
+
+    <!-- Confirmation before the final submit -->
+    <div class="fun-backdrop" ng-if="c.confirmOpen">
+      <div class="fun-modal" role="dialog" aria-modal="true" aria-labelledby="fun-modal-title">
+        <h2 id="fun-modal-title">Submit your crossword?</h2>
+        <p>This is final. You can't change your answers after submitting.</p>
+        <div class="fun-modal-actions">
+          <button type="button" class="fun-secondary" ng-click="c.closeConfirm()">Keep editing</button>
+          <button type="button" class="fun-submit" ng-click="c.confirmSubmit()">Yes, submit</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>]]></template>
+    </sp_widget>
+</record_update>

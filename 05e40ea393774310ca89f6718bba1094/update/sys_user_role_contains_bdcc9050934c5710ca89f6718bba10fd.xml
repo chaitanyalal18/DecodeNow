@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_user_role_contains">
+    <sys_user_role_contains action="INSERT_OR_UPDATE">
+        <contains display_value="sn_problem_read" name="sn_problem_read">ceb92b8153c833004558ddeeff7b12df</contains>
+        <role display_value="x_1802710_fun_on_0.player" name="x_1802710_fun_on_0.player">45e40ea393774310ca89f6718bba10a7</role>
+        <sys_class_name>sys_user_role_contains</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-10-16 06:07:39</sys_created_on>
+        <sys_id>bdcc9050934c5710ca89f6718bba10fd</sys_id>
+        <sys_mod_count>0</sys_mod_count>
+        <sys_name>sn_problem_read.x_1802710_fun_on_0.player</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sys_user_role_contains_bdcc9050934c5710ca89f6718bba10fd</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-10-16 06:07:39</sys_updated_on>
+    </sys_user_role_contains>
+</record_update>

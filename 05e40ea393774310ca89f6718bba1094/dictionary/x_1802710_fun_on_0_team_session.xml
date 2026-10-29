@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?><database>
+    <element attributes="enforce_dot_walk_cross_scope_access=true" db_object_id="7699422f93774310ca89f6718bba101f" label="Team Session" max_length="40" name="x_1802710_fun_on_0_team_session" type="collection">
+        <element label="Team" max_length="32" name="team" reference="x_1802710_fun_on_0_team" type="reference"/>
+        <element label="Progress" max_length="4000" name="progress" type="string"/>
+        <element choice="3" label="Submit type" max_length="40" name="submit_type" type="string">
+            <choice>
+                <element inactive_on_update="false" label="Auto" sequence="200" value="auto"/>
+                <element inactive_on_update="false" label="Ended" sequence="300" value="ended"/>
+                <element inactive_on_update="false" label="Manual" sequence="100" value="manual"/>
+            </choice>
+        </element>
+        <element label="Time taken (sec)" max_length="40" name="time_taken" type="integer"/>
+        <element label="Puzzle" max_length="32" name="puzzle" reference="x_1802710_fun_on_0_puzzle" type="reference"/>
+        <element label="Submitted answers" max_length="4000" name="submitted_answers" type="string"/>
+        <element choice="1" default="in_progress" label="Status" max_length="40" name="status" type="string">
+            <choice>
+                <element inactive_on_update="false" label="Submitted" sequence="200" value="submitted"/>
+                <element inactive_on_update="false" label="In progress" sequence="100" value="in_progress"/>
+            </choice>
+        </element>
+        <element label="Deadline" max_length="40" name="deadline" type="glide_date_time"/>
+        <element label="Started at" max_length="40" name="started_at" type="glide_date_time"/>
+        <element label="Submitted at" max_length="40" name="submitted_at" type="glide_date_time"/>
+        <element default="0" label="Points" max_length="40" name="points" type="integer"/>
+        <index name="index">
+            <element name="puzzle"/>
+        </index>
+        <index name="index2">
+            <element name="team"/>
+        </index>
+    </element>
+</database>

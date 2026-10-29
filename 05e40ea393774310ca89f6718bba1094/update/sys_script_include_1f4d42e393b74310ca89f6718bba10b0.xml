@@ -1,0 +1,984 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_script_include">
+    <sys_script_include action="INSERT_OR_UPDATE">
+        <access>package_private</access>
+        <active>true</active>
+        <api_name>x_1802710_fun_on_0.FunCrosswordService</api_name>
+        <caller_access/>
+        <client_callable>false</client_callable>
+        <description/>
+        <mobile_callable>false</mobile_callable>
+        <name>FunCrosswordService</name>
+        <sandbox_callable>false</sandbox_callable>
+        <script><![CDATA[/**
+ * FunCrosswordService
+ * Application: Fun on PDI   Scope: x_1802710_fun_on_0
+ *
+ * Server-side engine for the crossword game:
+ *   - loads the puzzle for a player (never sends answers to the browser)
+ *   - starts the team timer on first open (Started at / Deadline)
+ *   - autosaves progress
+ *   - handles manual submit (all cells filled) and auto-submit (time up)
+ *   - scores: 1 correct word = 1 point; time taken capped at the time limit
+ *   - builds the leaderboard: points desc, then time taken asc
+ *   - first login: the team sets its name and members (registerTeam)
+ *   - game start: teams wait until a game master starts the puzzle (startGame);
+ *     every team's timer runs from that moment, so all teams share the same deadline
+ *   - game master console: getConsoleState(), startGame(), endGame(), resetGame(), setTimeLimit(), getSolution(),
+ *     listPuzzles() and setActivePuzzle() for the Game selector (test game vs main event)
+ *   - game states: not_started -> running -> ended. The game ends when a game master
+ *     clicks End game, or automatically when the time limit runs out. On end, every team
+ *     still playing (or registered but never opened) is submitted and scored.
+ *   - helpers for game masters: validatePuzzle(), resetSessions()
+ *
+ * Cell keys use the format "row_col" (0-based), e.g. "2_1".
+ */
+var FunCrosswordService = Class.create();
+
+FunCrosswordService.TABLES = {
+    PUZZLE: 'x_1802710_fun_on_0_puzzle',
+    WORD: 'x_1802710_fun_on_0_puzzle_word',
+    ANSWER: 'x_1802710_fun_on_0_puzzle_answer',
+    TEAM: 'x_1802710_fun_on_0_team',
+    SESSION: 'x_1802710_fun_on_0_team_session'
+};
+
+// Requests that arrive this many seconds after the deadline are still accepted
+// as the final (auto) submission, to absorb network delay.
+FunCrosswordService.GRACE_SECONDS = 10;
+
+FunCrosswordService.prototype = {
+
+    initialize: function() {
+        this.T = FunCrosswordService.TABLES;
+        this.GRACE = FunCrosswordService.GRACE_SECONDS;
+    },
+
+    /* =====================================================================
+     * PUBLIC - used by the crossword widget
+     * ===================================================================== */
+
+    /**
+     * Everything the player's page needs. Starts the timer on first open.
+     * If the deadline has already passed (browser was closed), the session is
+     * auto-submitted first, so the page opens in its locked state.
+     */
+    getPuzzleForUser: function(userId) {
+        var team = this._getTeamForUser(userId);
+        if (!team) return this._error('NO_TEAM', 'Your user is not linked to an active team. Please contact the organizers.');
+        var puzzle = this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'No active puzzle is available yet.');
+        this._checkExpiry(puzzle);
+        var state = this._state(puzzle);
+
+        // First login: the team must set its name and members before the game.
+        if (!this._isRegistered(team)) {
+            if (state == 'ended') return this._endedView(team, puzzle);
+            return {
+                ok: true,
+                needsRegistration: true,
+                team: { name: team.getValue('name'), members: team.getValue('members') || '' },
+                puzzle: { name: puzzle.getValue('name'), timeLimitMinutes: parseInt(puzzle.getValue('time_limit'), 10) || 45 }
+            };
+        }
+
+        // Registered, but the game master hasn't started the game yet.
+        if (state == 'not_started') {
+            return {
+                ok: true,
+                waiting: true,
+                team: { name: team.getValue('name') },
+                puzzle: { name: puzzle.getValue('name'), timeLimitMinutes: parseInt(puzzle.getValue('time_limit'), 10) || 45 }
+            };
+        }
+
+        var ctx = this._getContext(userId);
+        if (!ctx.ok) return ctx.code == 'ENDED' ? this._endedView(team, puzzle) : ctx;
+
+        if (ctx.session.getValue('status') == 'in_progress' && this._isPastDeadline(ctx.session, 0)) {
+            this._finalize(ctx, this._parse(ctx.session.getValue('progress')), 'auto');
+        }
+
+        return {
+            ok: true,
+            team: { name: ctx.team.getValue('name') },
+            puzzle: {
+                id: ctx.puzzle.getUniqueValue(),
+                name: ctx.puzzle.getValue('name'),
+                rows: ctx.rows,
+                cols: ctx.cols,
+                timeLimitMinutes: ctx.timeLimitMinutes
+            },
+            words: ctx.words,
+            session: this._sessionState(ctx.session)
+        };
+    },
+
+    /**
+     * Autosave. Ignored once the session is submitted. If the deadline has
+     * passed, the session is auto-submitted using the last saved progress.
+     */
+    saveProgress: function(userId, cells) {
+        var ctx = this._getContext(userId);
+        if (!ctx.ok) return ctx;
+        var s = ctx.session;
+
+        if (s.getValue('status') == 'submitted') {
+            return { ok: true, saved: false, session: this._sessionState(s) };
+        }
+        if (this._isPastDeadline(s, this.GRACE)) {
+            this._finalize(ctx, this._parse(s.getValue('progress')), 'auto');
+            return { ok: true, saved: false, session: this._sessionState(s) };
+        }
+
+        var clean = this._sanitizeCells(cells, ctx.validCells);
+        s.setValue('progress', JSON.stringify(clean));
+        s.update();
+        return { ok: true, saved: true, session: this._sessionState(s) };
+    },
+
+    /**
+     * Submit the crossword.
+     *   isTimeUp = false : manual submit, every cell must be filled.
+     *   isTimeUp = true  : the widget's countdown reached 0; accepted only if
+     *                      the server agrees the time is (nearly) up.
+     * Submitting is final and idempotent.
+     */
+    submit: function(userId, cells, isTimeUp) {
+        var ctx = this._getContext(userId);
+        if (!ctx.ok) return ctx;
+        var s = ctx.session;
+
+        if (s.getValue('status') == 'submitted') {
+            return { ok: true, session: this._sessionState(s) };
+        }
+
+        var clean = this._sanitizeCells(cells, ctx.validCells);
+
+        if (this._isPastDeadline(s, this.GRACE)) {
+            // Too late: use what was last autosaved.
+            this._finalize(ctx, this._parse(s.getValue('progress')), 'auto');
+        } else if (isTimeUp && this._remainingSeconds(s) <= this.GRACE) {
+            // Countdown hit zero in the browser: take the grid as it is.
+            this._finalize(ctx, clean, 'auto');
+        } else {
+            if (!this._allFilled(clean, ctx.validCells)) {
+                return this._error('NOT_COMPLETE', 'Please fill every cell before submitting.');
+            }
+            this._finalize(ctx, clean, 'manual');
+        }
+        return { ok: true, session: this._sessionState(s) };
+    },
+
+    /**
+     * First-login team setup. Saves the team name and members and marks the team
+     * as registered. Can only be done once; game masters can edit the Team record later.
+     */
+    registerTeam: function(userId, teamName, members) {
+        var team = this._getTeamForUser(userId);
+        if (!team) return this._error('NO_TEAM', 'Your user is not linked to an active team. Please contact the organizers.');
+        var activePuzzle = this._getActivePuzzle();
+        if (activePuzzle && this._state(activePuzzle) == 'ended') {
+            return this._error('ENDED', 'The game has ended. Thanks for playing!');
+        }
+        if (this._isRegistered(team)) {
+            return { ok: true, alreadyRegistered: true, team: { name: team.getValue('name'), members: team.getValue('members') || '' } };
+        }
+
+        var name = String(teamName || '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+        if (name.length < 2 || name.length > 40) {
+            return this._error('BAD_NAME', 'Team name must be 2 to 40 characters.');
+        }
+
+        var list = members;
+        if (typeof list == 'string') list = list.split(/[,\n]/);
+        if (!list || typeof list.length != 'number') list = [];
+        var clean = [];
+        for (var i = 0; i < list.length; i++) {
+            var m = String(list[i] || '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '').substring(0, 60);
+            if (m) clean.push(m);
+        }
+        if (!clean.length) return this._error('NO_MEMBERS', 'Add at least one team member.');
+        if (clean.length > 8) return this._error('TOO_MANY', 'A team can have at most 8 members.');
+
+        var dup = new GlideRecord(this.T.TEAM);
+        dup.addQuery('name', name);
+        dup.addQuery('sys_id', '!=', team.getUniqueValue());
+        dup.setLimit(1);
+        dup.query();
+        if (dup.hasNext()) {
+            return this._error('NAME_TAKEN', 'Another team already uses "' + name + '". Please choose a different name.');
+        }
+
+        team.setValue('name', name);
+        team.setValue('members', clean.join(', '));
+        team.setValue('registered', true);
+        team.update();
+        return { ok: true, team: { name: name, members: clean.join(', ') } };
+    },
+
+    /* =====================================================================
+     * PUBLIC - used by the leaderboard widget
+     * ===================================================================== */
+
+    /**
+     * Leaderboard for a puzzle (defaults to the active puzzle).
+     * Submitted teams first: points desc, time taken asc, submitted at asc.
+     * Then teams in progress, then active teams that have not started.
+     * Teams with the same points and time share a rank.
+     */
+    getLeaderboard: function(puzzleId) {
+        var puzzle = puzzleId ? this._getPuzzle(puzzleId) : this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'No active puzzle.');
+        this._checkExpiry(puzzle);
+        var pid = puzzle.getUniqueValue();
+        var totalWords = this._getWords(pid).length;
+
+        var submitted = [], inProgress = [], seenTeams = {};
+        var s = new GlideRecord(this.T.SESSION);
+        s.addQuery('puzzle', pid);
+        s.query();
+        while (s.next()) {
+            var teamId = s.getValue('team');
+            seenTeams[teamId] = true;
+            var row = {
+                team: s.team.getDisplayValue(),
+                points: parseInt(s.getValue('points'), 10) || 0,
+                totalWords: totalWords,
+                timeTaken: parseInt(s.getValue('time_taken'), 10) || 0,
+                submittedAt: s.getValue('submitted_at') || '',
+                status: s.getValue('status') == 'submitted' ? 'Submitted' : 'In progress'
+            };
+            if (row.status == 'Submitted') submitted.push(row);
+            else inProgress.push(row);
+        }
+
+        submitted.sort(function(a, b) {
+            if (b.points != a.points) return b.points - a.points;
+            if (a.timeTaken != b.timeTaken) return a.timeTaken - b.timeTaken;
+            return a.submittedAt < b.submittedAt ? -1 : (a.submittedAt > b.submittedAt ? 1 : 0);
+        });
+
+        var rows = [], rank = 0, prev = null;
+        for (var i = 0; i < submitted.length; i++) {
+            var r = submitted[i];
+            if (!prev || prev.points != r.points || prev.timeTaken != r.timeTaken) rank = i + 1;
+            prev = r;
+            rows.push({
+                rank: rank, team: r.team, points: r.points, totalWords: totalWords,
+                timeTaken: r.timeTaken, timeTakenText: this.formatDuration(r.timeTaken), status: r.status
+            });
+        }
+        inProgress.sort(function(a, b) { return a.team < b.team ? -1 : 1; });
+        for (var j = 0; j < inProgress.length; j++) {
+            rows.push({ rank: null, team: inProgress[j].team, points: null, totalWords: totalWords,
+                timeTaken: null, timeTakenText: '', status: 'In progress' });
+        }
+
+        var t = new GlideRecord(this.T.TEAM);
+        t.addActiveQuery();
+        t.orderBy('name');
+        t.query();
+        while (t.next()) {
+            if (seenTeams[t.getUniqueValue()] || !this._isRegistered(t)) continue;
+            rows.push({ rank: null, team: t.getValue('name'), points: null, totalWords: totalWords,
+                timeTaken: null, timeTakenText: '', status: 'Not started' });
+        }
+
+        return { ok: true, puzzle: { id: pid, name: puzzle.getValue('name') }, totalWords: totalWords, rows: rows };
+    },
+
+    /* =====================================================================
+     * PUBLIC - used by the game master console and leaderboard
+     * ===================================================================== */
+
+    /** Name, state and countdown of the active puzzle. */
+    getGameClock: function() {
+        var puzzle = this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'No active puzzle.');
+        return { ok: true, puzzle: this._clock(puzzle) };
+    },
+
+    /**
+     * Everything the console shows: game state and countdown, and one row per team
+     * with its registration and progress. Ends the game first if time has run out.
+     */
+    getConsoleState: function() {
+        var puzzle = this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'No active puzzle. Load one with the seed script.');
+        this._checkExpiry(puzzle);
+        var pid = puzzle.getUniqueValue();
+        var words = this._getWords(pid);
+        var totalCells = 0, vc = this._validCells(words);
+        for (var k in vc) if (vc.hasOwnProperty(k)) totalCells++;
+        var running = this._isRunning(puzzle);
+
+        // sessions by team
+        var sessions = {};
+        var s = new GlideRecord(this.T.SESSION);
+        s.addQuery('puzzle', pid);
+        s.query();
+        while (s.next()) {
+            var progress = this._parse(s.getValue('status') == 'submitted' ? s.getValue('submitted_answers') : s.getValue('progress'));
+            var filled = 0;
+            for (var key in progress) if (progress.hasOwnProperty(key)) filled++;
+            var taken = parseInt(s.getValue('time_taken'), 10) || 0;
+            sessions[s.getValue('team')] = {
+                status: s.getValue('status'),
+                filled: filled,
+                points: parseInt(s.getValue('points'), 10) || 0,
+                timeTakenText: s.getValue('status') == 'submitted' ? this.formatDuration(taken) : '',
+                submitType: s.getValue('submit_type') || ''
+            };
+        }
+
+        var teams = [], counts = { total: 0, registered: 0, waiting: 0, playing: 0, submitted: 0 };
+        var t = new GlideRecord(this.T.TEAM);
+        t.addActiveQuery();
+        t.query();
+        while (t.next()) {
+            var reg = this._isRegistered(t);
+            var ses = sessions[t.getUniqueValue()];
+            var status = !reg ? 'not_registered' : (ses ? ses.status : (running ? 'not_opened' : 'waiting'));
+            counts.total++;
+            if (reg) counts.registered++;
+            if (status == 'waiting' || status == 'not_opened') counts.waiting++;
+            if (status == 'in_progress') counts.playing++;
+            if (status == 'submitted') counts.submitted++;
+            teams.push({
+                name: t.getValue('name'),
+                login: t.user.user_name.toString(),
+                members: t.getValue('members') || '',
+                registered: reg,
+                status: status,
+                filled: ses ? ses.filled : 0,
+                totalCells: totalCells,
+                points: ses && ses.status == 'submitted' ? ses.points : null,
+                totalWords: words.length,
+                timeTakenText: ses ? ses.timeTakenText : '',
+                submitType: ses ? ses.submitType : ''
+            });
+        }
+        teams.sort(function(a, b) {
+            var na = parseInt((a.login.match(/\d+$/) || [0])[0], 10), nb = parseInt((b.login.match(/\d+$/) || [0])[0], 10);
+            return na != nb ? na - nb : (a.login < b.login ? -1 : 1);
+        });
+
+        return {
+            ok: true,
+            puzzle: this._clock(puzzle),
+            words: words.length,
+            counts: counts,
+            teams: teams
+        };
+    },
+
+    /**
+     * The answer key laid out as the crossword, for the game master's "Reveal answers".
+     * Never call this from a player-facing widget.
+     */
+    getSolution: function(puzzleId) {
+        var puzzle = puzzleId ? this._getPuzzle(puzzleId) : this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'Puzzle not found.');
+        var pid = puzzle.getUniqueValue();
+        var answers = this._getAnswers(pid);
+        var words = this._getWords(pid).map(function(w) {
+            w.answer = answers[w.id] || '';
+            return w;
+        });
+        return { ok: true, words: words };
+    },
+
+    /** All puzzles for the console's Game selector, newest first. */
+    listPuzzles: function() {
+        var counts = {};
+        var agg = new GlideAggregate(this.T.WORD);
+        agg.addAggregate('COUNT');
+        agg.groupBy('puzzle');
+        agg.query();
+        while (agg.next()) counts[agg.getValue('puzzle')] = parseInt(agg.getAggregate('COUNT'), 10) || 0;
+
+        var list = [];
+        var p = new GlideRecord(this.T.PUZZLE);
+        p.orderByDesc('sys_created_on');
+        p.query();
+        while (p.next()) {
+            var active = String(p.getValue('active'));
+            list.push({
+                id: p.getUniqueValue(),
+                name: p.getValue('name'),
+                active: active == '1' || active == 'true',
+                state: this._state(p),
+                words: counts[p.getUniqueValue()] || 0
+            });
+        }
+        return list;
+    },
+
+    /**
+     * Makes one puzzle the active game for players, the console and the leaderboard.
+     * Not allowed while a game is running. Team registrations are kept
+     * (use Reset game if teams should register again).
+     */
+    setActivePuzzle: function(puzzleId) {
+        var target = this._getPuzzle(puzzleId);
+        if (!target) return this._error('NO_PUZZLE', 'Game not found.');
+
+        var running = new GlideRecord(this.T.PUZZLE);
+        running.addActiveQuery();
+        running.addQuery('game_state', 'running');
+        running.addQuery('sys_id', '!=', puzzleId);
+        running.setLimit(1);
+        running.query();
+        if (running.next()) {
+            return this._error('RUNNING', '"' + running.getValue('name') + '" is running. End it before switching games.');
+        }
+
+        var others = new GlideRecord(this.T.PUZZLE);
+        others.addActiveQuery();
+        others.addQuery('sys_id', '!=', puzzleId);
+        others.query();
+        while (others.next()) {
+            others.setValue('active', false);
+            others.update();
+        }
+        target.setValue('active', true);
+        target.update();
+        return { ok: true, name: target.getValue('name') };
+    },
+
+    /** Changes the time limit. Only allowed before the game starts. */
+    setTimeLimit: function(puzzleId, minutes) {
+        var puzzle = puzzleId ? this._getPuzzle(puzzleId) : this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'Puzzle not found.');
+        if (this._isRunning(puzzle)) return this._error('RUNNING', 'The time limit cannot change while the game is running.');
+        var m = parseInt(minutes, 10);
+        if (!(m >= 1 && m <= 240)) return this._error('BAD_LIMIT', 'Enter a time limit between 1 and 240 minutes.');
+        puzzle.setValue('time_limit', m);
+        puzzle.update();
+        return { ok: true };
+    },
+
+    /* =====================================================================
+     * PUBLIC - used by the auto-submit Scheduled Job
+     * ===================================================================== */
+
+    /**
+     * Auto-submits every in-progress session whose deadline (plus grace) has
+     * passed, using its last autosaved progress. Returns the number submitted.
+     */
+    autoSubmitExpired: function() {
+        var active = this._getActivePuzzle();
+        if (active) this._checkExpiry(active);
+
+        var cutoff = new GlideDateTime();
+        cutoff.addSeconds(-this.GRACE);
+
+        var s = new GlideRecord(this.T.SESSION);
+        s.addQuery('status', 'in_progress');
+        s.addQuery('deadline', '<', cutoff.getValue());
+        s.query();
+        var count = 0;
+        while (s.next()) {
+            var ctx = this._buildContext(s.team.getRefRecord(), s.puzzle.getRefRecord(), s);
+            this._finalize(ctx, this._parse(s.getValue('progress')), 'auto');
+            count++;
+        }
+        if (count > 0) gs.info('[FunCrosswordService] Auto-submitted ' + count + ' expired session(s).');
+        return count;
+    },
+
+    /* =====================================================================
+     * PUBLIC - helpers for game masters (run from Scripts - Background)
+     * ===================================================================== */
+
+    /**
+     * Checks the puzzle data before the event:
+     * missing answers, wrong lengths, words outside the grid,
+     * crossing letters that don't match, clue number clashes.
+     */
+    validatePuzzle: function(puzzleId) {
+        var puzzle = puzzleId ? this._getPuzzle(puzzleId) : this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'Puzzle not found.');
+        var pid = puzzle.getUniqueValue();
+        var rows = parseInt(puzzle.getValue('grid_rows'), 10) || 15;
+        var cols = parseInt(puzzle.getValue('grid_cols'), 10) || 15;
+        var words = this._getWords(pid);
+        var answers = this._getAnswers(pid);
+        var problems = [], grid = {}, starts = {}, numbers = {};
+
+        for (var i = 0; i < words.length; i++) {
+            var w = words[i];
+            var label = w.number + ' ' + w.direction;
+            var ans = answers[w.id];
+
+            if (numbers[label]) problems.push('Duplicate clue: ' + label);
+            numbers[label] = true;
+
+            var startKey = w.row + '_' + w.col;
+            if (starts[startKey] && starts[startKey] != w.number) {
+                problems.push('Cell ' + startKey + ' starts clues ' + starts[startKey] + ' and ' + w.number + '; they should share one number');
+            }
+            starts[startKey] = w.number;
+
+            if (!ans) { problems.push(label + ': no answer record'); continue; }
+            if (ans.length != w.length) {
+                problems.push(label + ': answer "' + ans + '" has ' + ans.length + ' letters, word length is ' + w.length);
+            }
+
+            var cells = this._wordCells(w);
+            for (var c = 0; c < cells.length; c++) {
+                var rc = cells[c];
+                if (rc.r < 0 || rc.c < 0 || rc.r >= rows || rc.c >= cols) {
+                    problems.push(label + ': goes outside the ' + rows + 'x' + cols + ' grid');
+                    break;
+                }
+                var key = rc.r + '_' + rc.c;
+                var letter = ans.charAt(c);
+                if (grid[key] && grid[key].letter != letter) {
+                    problems.push('Crossing conflict at ' + key + ': ' + grid[key].label + ' has "' + grid[key].letter +
+                        '", ' + label + ' has "' + letter + '"');
+                } else {
+                    grid[key] = { letter: letter, label: label };
+                }
+            }
+        }
+        return { ok: problems.length === 0, words: words.length, problems: problems };
+    },
+
+    /**
+     * Deletes all sessions of a puzzle (defaults to the active puzzle).
+     * Use after the dry run so every team starts fresh.
+     */
+    resetSessions: function(puzzleId) {
+        var puzzle = puzzleId ? this._getPuzzle(puzzleId) : this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'Puzzle not found.');
+        var s = new GlideRecord(this.T.SESSION);
+        s.addQuery('puzzle', puzzle.getUniqueValue());
+        s.query();
+        var count = s.getRowCount();
+        s.deleteMultiple();
+        return { ok: true, deleted: count };
+    },
+
+    /**
+     * Starts the game: every waiting team sees the crossword within a few seconds.
+     * All timers run from this moment. Used by the "Start game" UI Action.
+     */
+    startGame: function(puzzleId) {
+        var puzzle = puzzleId ? this._getPuzzle(puzzleId) : this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'Puzzle not found.');
+        if (this._isRunning(puzzle)) return { ok: true, alreadyRunning: true };
+        if (this._state(puzzle) == 'ended') return this._error('ENDED', 'The game has ended. Reset the game before starting again.');
+        puzzle.setValue('game_state', 'running');
+        puzzle.setValue('started_at', new GlideDateTime().getValue());
+        puzzle.update();
+        return { ok: true };
+    },
+
+    /**
+     * Ends the game now: every team still playing is submitted with what it has and
+     * scored, registered teams that never opened the crossword are scored 0, and the
+     * game moves to "ended" (final leaderboard). Used by the console's End game button.
+     */
+    endGame: function(puzzleId) {
+        var puzzle = puzzleId ? this._getPuzzle(puzzleId) : this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'Puzzle not found.');
+        var state = this._state(puzzle);
+        if (state == 'ended') return { ok: true, alreadyEnded: true };
+        if (state != 'running') return this._error('NOT_RUNNING', 'The game has not started yet.');
+        var n = this._endGameRecord(puzzle);
+        return { ok: true, submitted: n };
+    },
+
+    /**
+     * Clears everything for a fresh game: deletes all sessions (progress, answers, points),
+     * sets every team back to unregistered with no members (table teams get their
+     * "Table NN" name back), and puts the game back to "not started".
+     */
+    resetGame: function(puzzleId) {
+        var puzzle = puzzleId ? this._getPuzzle(puzzleId) : this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'Puzzle not found.');
+        var res = this.resetSessions(puzzle.getUniqueValue());
+
+        var teams = 0;
+        var t = new GlideRecord(this.T.TEAM);
+        t.query();
+        while (t.next()) {
+            var m = /^table_(\d+)$/.exec(t.user.user_name.toString());
+            if (m) {
+                var n = parseInt(m[1], 10);
+                t.setValue('name', 'Table ' + (n < 10 ? '0' : '') + n);
+            }
+            t.setValue('members', '');
+            t.setValue('registered', false);
+            t.update();
+            teams++;
+        }
+
+        puzzle.setValue('game_state', 'not_started');
+        puzzle.setValue('started_at', '');
+        puzzle.update();
+        return { ok: true, deleted: res.deleted, teams: teams };
+    },
+
+    /** 1625 -> "27m 05s", 3725 -> "1h 02m 05s" */
+    formatDuration: function(totalSeconds) {
+        var sec = Math.max(0, parseInt(totalSeconds, 10) || 0);
+        var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+        var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+        return h > 0 ? h + 'h ' + pad(m) + 'm ' + pad(s) + 's' : m + 'm ' + pad(s) + 's';
+    },
+
+    /* =====================================================================
+     * PRIVATE
+     * ===================================================================== */
+
+    _getContext: function(userId) {
+        var team = this._getTeamForUser(userId);
+        if (!team) return this._error('NO_TEAM', 'Your user is not linked to an active team. Please contact the organizers.');
+        if (!this._isRegistered(team)) return this._error('NOT_REGISTERED', 'Please set up your team first.');
+        var puzzle = this._getActivePuzzle();
+        if (!puzzle) return this._error('NO_PUZZLE', 'No active puzzle is available yet.');
+        this._checkExpiry(puzzle);
+        var state = this._state(puzzle);
+        if (state == 'not_started') return this._error('NOT_STARTED', 'The game has not started yet.');
+        var session = state == 'running'
+            ? this._getOrCreateSession(puzzle, team)
+            : this._findSession(puzzle.getUniqueValue(), team.getUniqueValue());
+        if (!session) {
+            return state == 'ended'
+                ? this._error('ENDED', 'The game has ended. Thanks for playing!')
+                : this._error('SESSION_FAILED', 'Could not start your session. Please refresh the page.');
+        }
+        return this._buildContext(team, puzzle, session);
+    },
+
+    _buildContext: function(team, puzzle, session) {
+        var words = this._getWords(puzzle.getUniqueValue());
+        return {
+            ok: true,
+            team: team,
+            puzzle: puzzle,
+            session: session,
+            rows: parseInt(puzzle.getValue('grid_rows'), 10) || 15,
+            cols: parseInt(puzzle.getValue('grid_cols'), 10) || 15,
+            timeLimitMinutes: parseInt(puzzle.getValue('time_limit'), 10) || 45,
+            words: words,
+            validCells: this._validCells(words)
+        };
+    },
+
+    _getTeamForUser: function(userId) {
+        var t = new GlideRecord(this.T.TEAM);
+        t.addQuery('user', userId);
+        t.addActiveQuery();
+        t.setLimit(1);
+        t.query();
+        return t.next() ? t : null;
+    },
+
+    _clock: function(puzzle) {
+        var state = this._state(puzzle);
+        var limit = parseInt(puzzle.getValue('time_limit'), 10) || 45;
+        var out = {
+            id: puzzle.getUniqueValue(),
+            name: puzzle.getValue('name'),
+            state: state,
+            timeLimitMinutes: limit,
+            startedAt: '',
+            remainingSeconds: null,
+            timeUp: false
+        };
+        if (state != 'not_started' && puzzle.getValue('started_at')) {
+            var start = new GlideDateTime(puzzle.getValue('started_at'));
+            out.startedAt = start.getDisplayValue();
+            var rem = Math.ceil((start.getNumericValue() + limit * 60000 - new GlideDateTime().getNumericValue()) / 1000);
+            out.remainingSeconds = state == 'ended' ? 0 : Math.max(0, rem);
+            out.timeUp = rem <= 0;
+        }
+        return out;
+    },
+
+    _state: function(puzzle) {
+        return puzzle.getValue('game_state') || 'not_started';
+    },
+
+    /** Ends the game automatically once the time limit (plus grace) has passed. */
+    _checkExpiry: function(puzzle) {
+        if (!puzzle || !this._isRunning(puzzle) || !puzzle.getValue('started_at')) return;
+        var limit = parseInt(puzzle.getValue('time_limit'), 10) || 45;
+        var end = new GlideDateTime(puzzle.getValue('started_at')).getNumericValue() + limit * 60000 + this.GRACE * 1000;
+        if (new GlideDateTime().getNumericValue() > end) this._endGameRecord(puzzle);
+    },
+
+    /** Submits and scores every unfinished team, then marks the game as ended. */
+    _endGameRecord: function(puzzle) {
+        var pid = puzzle.getUniqueValue();
+        var limit = parseInt(puzzle.getValue('time_limit'), 10) || 45;
+        var started = puzzle.getValue('started_at') ? new GlideDateTime(puzzle.getValue('started_at')).getNumericValue() : 0;
+        var timeIsUp = started && new GlideDateTime().getNumericValue() >= started + limit * 60000;
+        var type = timeIsUp ? 'auto' : 'ended';
+        var count = 0, seen = {};
+
+        var s = new GlideRecord(this.T.SESSION);
+        s.addQuery('puzzle', pid);
+        s.query();
+        while (s.next()) {
+            seen[s.getValue('team')] = true;
+            if (s.getValue('status') != 'in_progress') continue;
+            var ctx = this._buildContext(s.team.getRefRecord(), puzzle, s);
+            this._finalize(ctx, this._parse(s.getValue('progress')), type);
+            count++;
+        }
+
+        // Registered teams that never opened the crossword still get a result (0 points).
+        var t = new GlideRecord(this.T.TEAM);
+        t.addActiveQuery();
+        t.query();
+        while (t.next()) {
+            if (seen[t.getUniqueValue()] || !this._isRegistered(t)) continue;
+            var ns = this._getOrCreateSession(puzzle, t);
+            if (ns && ns.getValue('status') == 'in_progress') {
+                this._finalize(this._buildContext(t, puzzle, ns), {}, type);
+                count++;
+            }
+        }
+
+        puzzle.setValue('game_state', 'ended');
+        puzzle.update();
+        gs.info('[FunCrosswordService] Game ended (' + type + '); ' + count + ' team(s) submitted.');
+        return count;
+    },
+
+    _endedView: function(team, puzzle) {
+        return { ok: true, ended: true, team: { name: team.getValue('name') }, puzzle: { name: puzzle.getValue('name') } };
+    },
+
+    _isRunning: function(puzzle) {
+        return puzzle.getValue('game_state') == 'running';
+    },
+
+    _isRegistered: function(team) {
+        var v = String(team.getValue('registered'));
+        return v == '1' || v == 'true';
+    },
+
+    _getActivePuzzle: function() {
+        var p = new GlideRecord(this.T.PUZZLE);
+        p.addActiveQuery();
+        p.orderByDesc('sys_created_on');
+        p.setLimit(1);
+        p.query();
+        return p.next() ? p : null;
+    },
+
+    _getPuzzle: function(puzzleId) {
+        var p = new GlideRecord(this.T.PUZZLE);
+        return p.get(puzzleId) ? p : null;
+    },
+
+    _findSession: function(puzzleId, teamId) {
+        var s = new GlideRecord(this.T.SESSION);
+        s.addQuery('puzzle', puzzleId);
+        s.addQuery('team', teamId);
+        s.setLimit(1);
+        s.query();
+        return s.next() ? s : null;
+    },
+
+    /** Creates the session on first open. Started at = game start time, Deadline = start + time limit. */
+    _getOrCreateSession: function(puzzle, team) {
+        var pid = puzzle.getUniqueValue(), tid = team.getUniqueValue();
+        var existing = this._findSession(pid, tid);
+        if (existing) return existing;
+
+        var limitMin = parseInt(puzzle.getValue('time_limit'), 10) || 45;
+        var now = puzzle.getValue('started_at') ? new GlideDateTime(puzzle.getValue('started_at')) : new GlideDateTime();
+        var deadline = new GlideDateTime(now);
+        deadline.addSeconds(limitMin * 60);
+
+        var s = new GlideRecord(this.T.SESSION);
+        s.initialize();
+        s.setValue('puzzle', pid);
+        s.setValue('team', tid);
+        s.setValue('status', 'in_progress');
+        s.setValue('progress', '{}');
+        s.setValue('started_at', now.getValue());
+        s.setValue('deadline', deadline.getValue());
+        s.setValue('points', 0);
+        s.insert();
+
+        // Re-read: covers the case where a teammate's laptop created it at the same moment
+        // (the unique index on puzzle + team rejects the second insert).
+        return this._findSession(pid, tid);
+    },
+
+    /** Words without answers, ordered for display. */
+    _getWords: function(puzzleId) {
+        var list = [];
+        var w = new GlideRecord(this.T.WORD);
+        w.addQuery('puzzle', puzzleId);
+        w.orderBy('clue_number');
+        w.orderBy('direction');
+        w.query();
+        while (w.next()) {
+            list.push({
+                id: w.getUniqueValue(),
+                number: parseInt(w.getValue('clue_number'), 10),
+                direction: w.getValue('direction'),
+                row: parseInt(w.getValue('start_row'), 10),
+                col: parseInt(w.getValue('start_col'), 10),
+                length: parseInt(w.getValue('word_length'), 10),
+                clue: w.getValue('clue') || ''
+            });
+        }
+        return list;
+    },
+
+    /** Map of word sys_id -> cleaned uppercase answer. Server-side only. */
+    _getAnswers: function(puzzleId) {
+        var map = {};
+        var a = new GlideRecord(this.T.ANSWER);
+        a.addQuery('word.puzzle', puzzleId);
+        a.query();
+        while (a.next()) {
+            map[a.getValue('word')] = (a.getValue('answer') || '').toUpperCase().replace(/[^A-Z]/g, '');
+        }
+        return map;
+    },
+
+    _wordCells: function(w) {
+        var cells = [];
+        for (var i = 0; i < w.length; i++) {
+            cells.push(w.direction == 'across' ? { r: w.row, c: w.col + i } : { r: w.row + i, c: w.col });
+        }
+        return cells;
+    },
+
+    _validCells: function(words) {
+        var valid = {};
+        for (var i = 0; i < words.length; i++) {
+            var cells = this._wordCells(words[i]);
+            for (var j = 0; j < cells.length; j++) valid[cells[j].r + '_' + cells[j].c] = true;
+        }
+        return valid;
+    },
+
+    /** Keeps only real cells holding a single letter, uppercased. */
+    _sanitizeCells: function(cells, validCells) {
+        var input = cells;
+        if (typeof input == 'string') input = this._parse(input);
+        var clean = {};
+        if (!input || typeof input != 'object') return clean;
+        for (var key in input) {
+            if (!input.hasOwnProperty(key) || !validCells[key]) continue;
+            var v = String(input[key] || '').toUpperCase();
+            if (/^[A-Z]$/.test(v)) clean[key] = v;
+        }
+        return clean;
+    },
+
+    _allFilled: function(clean, validCells) {
+        for (var key in validCells) {
+            if (validCells.hasOwnProperty(key) && !clean[key]) return false;
+        }
+        return true;
+    },
+
+    /** 1 point for every word whose letters all match its answer. */
+    _score: function(words, answers, cells) {
+        var points = 0;
+        for (var i = 0; i < words.length; i++) {
+            var ans = answers[words[i].id];
+            if (!ans) continue;
+            var wc = this._wordCells(words[i]), typed = '';
+            for (var j = 0; j < wc.length; j++) typed += cells[wc[j].r + '_' + wc[j].c] || '';
+            if (typed === ans) points++;
+        }
+        return points;
+    },
+
+    /** Final submission: scores, stamps times, locks the session. */
+    _finalize: function(ctx, cells, submitType) {
+        var s = ctx.session;
+        if (s.getValue('status') == 'submitted') return;
+
+        var limitSec = ctx.timeLimitMinutes * 60;
+        var started = new GlideDateTime(s.getValue('started_at'));
+        var submittedAt = new GlideDateTime();
+        // An automatic submit after the deadline is recorded at the deadline itself.
+        if (submitType != 'manual' && this._isPastDeadline(s, 0)) {
+            submittedAt = new GlideDateTime(s.getValue('deadline'));
+        }
+        var taken = Math.round((submittedAt.getNumericValue() - started.getNumericValue()) / 1000);
+        taken = Math.max(0, Math.min(taken, limitSec));
+
+        var clean = this._sanitizeCells(cells, ctx.validCells);
+        var points = this._score(ctx.words, this._getAnswers(ctx.puzzle.getUniqueValue()), clean);
+
+        s.setValue('progress', JSON.stringify(clean));
+        s.setValue('submitted_answers', JSON.stringify(clean));
+        s.setValue('status', 'submitted');
+        s.setValue('submit_type', submitType);
+        s.setValue('submitted_at', submittedAt.getValue());
+        s.setValue('time_taken', taken);
+        s.setValue('points', points);
+        s.update();
+    },
+
+    /** What the widget needs about the session. Points are NOT sent to the player. */
+    _sessionState: function(s) {
+        var submitted = s.getValue('status') == 'submitted';
+        var taken = parseInt(s.getValue('time_taken'), 10) || 0;
+        return {
+            status: s.getValue('status'),
+            submitType: s.getValue('submit_type') || '',
+            cells: this._parse(submitted ? s.getValue('submitted_answers') : s.getValue('progress')),
+            remainingSeconds: submitted ? 0 : this._remainingSeconds(s),
+            timeTaken: submitted ? taken : null,
+            timeTakenText: submitted ? this.formatDuration(taken) : ''
+        };
+    },
+
+    _remainingSeconds: function(s) {
+        var now = new GlideDateTime().getNumericValue();
+        var deadline = new GlideDateTime(s.getValue('deadline')).getNumericValue();
+        return Math.max(0, Math.ceil((deadline - now) / 1000));
+    },
+
+    _isPastDeadline: function(s, graceSeconds) {
+        var now = new GlideDateTime().getNumericValue();
+        var deadline = new GlideDateTime(s.getValue('deadline')).getNumericValue();
+        return now > deadline + (graceSeconds || 0) * 1000;
+    },
+
+    _parse: function(str) {
+        if (!str) return {};
+        try {
+            var o = JSON.parse(str);
+            return (o && typeof o == 'object') ? o : {};
+        } catch (e) {
+            return {};
+        }
+    },
+
+    _error: function(code, message) {
+        return { ok: false, code: code, message: message };
+    },
+
+    type: 'FunCrosswordService'
+};]]></script>
+        <sys_class_name>sys_script_include</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-10-14 06:24:43</sys_created_on>
+        <sys_id>1f4d42e393b74310ca89f6718bba10b0</sys_id>
+        <sys_mod_count>5</sys_mod_count>
+        <sys_name>FunCrosswordService</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy>read</sys_policy>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sys_script_include_1f4d42e393b74310ca89f6718bba10b0</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-10-15 12:16:33</sys_updated_on>
+    </sys_script_include>
+</record_update>

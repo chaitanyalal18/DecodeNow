@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sp_widget">
+    <sp_widget action="INSERT_OR_UPDATE">
+        <category>custom</category>
+        <client_script><![CDATA[api.controller = function($scope, $interval, $timeout, spUtil) {
+    /* Fun on PDI - Leaderboard: live for the projector.
+     * Refreshes the moment a Team Session or the Puzzle changes (record watch),
+     * with a 5-second poll as a safety net (it also ends the game when time runs out). */
+    var c = this;
+    var REFRESH_MS = 5000;
+
+    c.board = c.data.board || {};
+    c.clock = c.data.clock || {};
+    c.clockText = '';
+    var endAt = 0;
+    var busy = false;
+
+    sync();
+    var poll = c.data.allowed ? $interval(refresh, REFRESH_MS) : null;
+
+    var soon = null;
+    function refreshSoon() {
+        if (soon) $timeout.cancel(soon);
+        soon = $timeout(refresh, 300); // several records change at once on End game
+    }
+    if (c.data.allowed) {
+        spUtil.recordWatch($scope, 'x_1802710_fun_on_0_team_session', 'statusISNOTEMPTY', refreshSoon);
+        spUtil.recordWatch($scope, 'x_1802710_fun_on_0_puzzle', 'active=true', refreshSoon);
+    }
+    var tick = $interval(updateClock, 1000);
+
+    function refresh() {
+        if (busy) return;
+        busy = true;
+        c.server.get({ action: 'refresh' }).then(function(r) {
+            busy = false;
+            c.board = r.data.board || c.board;
+            c.clock = r.data.clock || c.clock;
+            sync();
+        }, function() { busy = false; });
+    }
+
+    function sync() {
+        endAt = c.clock && c.clock.state == 'running' && c.clock.remainingSeconds !== null
+            ? Date.now() + c.clock.remainingSeconds * 1000 : 0;
+        updateClock();
+    }
+
+    function updateClock() {
+        if (!endAt) { c.clockText = ''; return; }
+        var sec = Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
+        var m = Math.floor(sec / 60), s = sec % 60;
+        c.clockText = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    c.rowClass = function(r) {
+        if (!r.rank) return 'is-pending';
+        if (c.clock.state != 'ended') return '';   // top 3 highlighted only after the game ends
+        return { 1: 'is-first', 2: 'is-second', 3: 'is-third' }[r.rank] || '';
+    };
+
+    c.statusLabel = function(r) {
+        return { 'In progress': 'Playing' }[r.status] || r.status;
+    };
+
+    c.statusKey = function(r) {
+        return r.status == 'Submitted' ? 'done' : (r.status == 'In progress' ? 'progress' : 'notstarted');
+    };
+
+    $scope.$on('$destroy', function() {
+        if (poll) $interval.cancel(poll);
+        $interval.cancel(tick);
+    });
+};]]></client_script>
+        <controller_as>c</controller_as>
+        <css>/* Fun on PDI - Leaderboard, sized for a projector (BCE Global Tech palette) */&#13;
+.lb {&#13;
+  --brand: #00549a;&#13;
+  --brand-dark: #003778;&#13;
+  --ink: #1b2733;&#13;
+  --muted: #5b6878;&#13;
+  --line: #d5dee8;&#13;
+  max-width: 1100px;&#13;
+  margin: 0 auto;&#13;
+  padding: 24px 16px 48px;&#13;
+  color: var(--ink);&#13;
+}&#13;
+.lb-empty { margin: 40px auto; max-width: 520px; padding: 24px; border: 2px solid var(--brand); border-radius: 8px; }&#13;
+.lb-head {&#13;
+  display: flex;&#13;
+  justify-content: space-between;&#13;
+  align-items: flex-end;&#13;
+  gap: 20px;&#13;
+  flex-wrap: wrap;&#13;
+  padding-bottom: 16px;&#13;
+  border-bottom: 4px solid var(--brand);&#13;
+  margin-bottom: 20px;&#13;
+}&#13;
+.lb-kicker { margin: 0 0 4px; font-weight: 800; color: var(--brand); letter-spacing: 0.02em; font-size: 26px; line-height: 1.1; }&#13;
+.lb-head h1 { margin: 4px 0 0; font-size: 48px; font-weight: 800; color: var(--brand-dark); line-height: 1; }&#13;
+.lb-sub { margin: 8px 0 0; color: var(--muted); font-size: 16px; }&#13;
+.lb-clock {&#13;
+  text-align: right;&#13;
+  font-size: 52px;&#13;
+  font-weight: 800;&#13;
+  font-variant-numeric: tabular-nums;&#13;
+  color: var(--brand-dark);&#13;
+  line-height: 1;&#13;
+}&#13;
+.lb-clock span { display: block; font-size: 14px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }&#13;
+.lb-clock.is-up { color: #b3261e; }&#13;
+.lb-clock.is-idle { font-size: 30px; }&#13;
+.lb-clock.is-final { color: #00549a; }&#13;
+&#13;
+.lb-table { width: 100%; border-collapse: separate; border-spacing: 0 8px; font-size: 22px; }&#13;
+.lb-table th {&#13;
+  text-align: left;&#13;
+  font-size: 14px;&#13;
+  text-transform: uppercase;&#13;
+  letter-spacing: 0.06em;&#13;
+  color: var(--muted);&#13;
+  padding: 0 16px;&#13;
+}&#13;
+.lb-table td { padding: 14px 16px; background: #fff; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }&#13;
+.lb-table td:first-child { border-left: 1px solid var(--line); border-radius: 8px 0 0 8px; }&#13;
+.lb-table td:last-child { border-right: 1px solid var(--line); border-radius: 0 8px 8px 0; }&#13;
+.lb-rank { font-weight: 800; width: 80px; color: var(--brand); }&#13;
+.lb-team { font-weight: 800; }&#13;
+.lb-points { font-weight: 800; }&#13;
+&#13;
+/* new submissions slide in */&#13;
+.lb-table tbody tr { animation: lb-in 0.4s ease-out; }&#13;
+@keyframes lb-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }&#13;
+@media (prefers-reduced-motion: reduce) { .lb-table tbody tr { animation: none; } }&#13;
+&#13;
+/* top 3, only once the game has ended */&#13;
+.lb-table tr.is-first td { background: #00549a; color: #fff; border-color: #00549a; font-size: 26px; padding-top: 20px; padding-bottom: 20px; }&#13;
+.lb-table tr.is-first .lb-rank { color: #fff; }&#13;
+.lb-table tr.is-second td { background: #d3e5f7; border-color: #b7d3ee; }&#13;
+.lb-table tr.is-third td { background: #e9f2fb; border-color: #cfe1f3; }&#13;
+.lb-table tr.is-pending td { color: var(--muted); }&#13;
+&#13;
+.lb-status { display: inline-block; padding: 3px 12px; border-radius: 14px; font-size: 15px; font-weight: 700; background: #e3f4ea; color: #167a4e; }&#13;
+.lb-status.is-progress { background: #fff3dc; color: #a86400; }&#13;
+.lb-status.is-notstarted { background: #eef1f4; color: var(--muted); }&#13;
+.is-first .lb-status { background: #fff; color: #00549a; }&#13;
+.lb-none { text-align: center; color: var(--muted); }&#13;
+.lb-foot { margin-top: 16px; color: var(--muted); font-size: 14px; text-align: center; }&#13;
+&#13;
+@media (max-width: 760px) {&#13;
+  .lb-head h1 { font-size: 34px; }&#13;
+  .lb-clock { font-size: 36px; }&#13;
+  .lb-table { font-size: 16px; }&#13;
+}</css>
+        <data_table>sp_instance</data_table>
+        <demo_data/>
+        <description/>
+        <docs/>
+        <field_list/>
+        <has_preview>false</has_preview>
+        <id>fun-leaderboard</id>
+        <internal>false</internal>
+        <link><![CDATA[function link(scope, element, attrs, controller) {
+  
+}]]></link>
+        <name>Leaderboard</name>
+        <option_schema/>
+        <public>false</public>
+        <roles/>
+        <script><![CDATA[(function() {
+    /* Fun on PDI - Leaderboard (server script). Game masters only. */
+    data.allowed = gs.hasRole('x_1802710_fun_on_0.game_master');
+    if (!data.allowed) return;
+
+    var svc = new FunCrosswordService();
+    svc.autoSubmitExpired();             // keeps the board current even if nobody's browser is open
+    data.board = svc.getLeaderboard();
+    var clock = svc.getGameClock();
+    data.clock = clock.ok ? clock.puzzle : {};
+})();]]></script>
+        <servicenow>false</servicenow>
+        <sys_class_name>sp_widget</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-10-14 12:34:29</sys_created_on>
+        <sys_id>4bd16b6b93ff4310ca89f6718bba102e</sys_id>
+        <sys_mod_count>3</sys_mod_count>
+        <sys_name>Leaderboard</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sp_widget_4bd16b6b93ff4310ca89f6718bba102e</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-10-14 18:28:24</sys_updated_on>
+        <template><![CDATA[<div class="lb">
+  <div class="lb-empty" ng-if="!c.data.allowed">
+    <h2>Game masters only</h2>
+    <p>You need the game master role to view the leaderboard.</p>
+  </div>
+
+  <div ng-if="c.data.allowed">
+    <header class="lb-head">
+      <div>
+        <p class="lb-kicker" ng-if="c.board.ok">{{c.board.puzzle.name}}</p>
+        <h1>Leaderboard</h1>
+      </div>
+      <div class="lb-clock" ng-class="{'is-up': c.clockText == '00:00'}" ng-if="c.clock.state == 'running' && c.clockText" role="timer">
+        <span>{{c.clockText == '00:00' ? "Time's up" : 'Time left'}}</span>
+        {{c.clockText}}
+      </div>
+      <div class="lb-clock is-idle" ng-if="c.clock.state == 'not_started'">
+        <span>Status</span>Starting soon
+      </div>
+      <div class="lb-clock is-idle is-final" ng-if="c.clock.state == 'ended'">
+        <span>Game over</span>Final results
+      </div>
+    </header>
+
+    <div class="lb-empty" ng-if="!c.board.ok">
+      <p>{{c.board.message}}</p>
+    </div>
+
+    <table class="lb-table" ng-if="c.board.ok">
+      <thead>
+        <tr>
+          <th scope="col">Rank</th>
+          <th scope="col">Team</th>
+          <th scope="col">Points</th>
+          <th scope="col">Time taken</th>
+          <th scope="col">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr ng-repeat="r in c.board.rows track by r.team" ng-class="c.rowClass(r)">
+          <td class="lb-rank">{{r.rank || '-'}}</td>
+          <td class="lb-team">{{r.team}}</td>
+          <td class="lb-points">{{r.points === null ? '-' : r.points + ' / ' + r.totalWords}}</td>
+          <td>{{r.timeTakenText || '-'}}</td>
+          <td><span class="lb-status" ng-class="'is-' + c.statusKey(r)">{{c.statusLabel(r)}}</span></td>
+        </tr>
+        <tr ng-if="!c.board.rows.length">
+          <td colspan="5" class="lb-none">No teams yet.</td>
+        </tr>
+      </tbody>
+    </table>
+
+  </div>
+</div>]]></template>
+    </sp_widget>
+</record_update>

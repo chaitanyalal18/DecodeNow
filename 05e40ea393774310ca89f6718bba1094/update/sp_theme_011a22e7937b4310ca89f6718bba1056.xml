@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sp_theme">
+    <sp_theme action="INSERT_OR_UPDATE">
+        <css_variables>$brand-primary: #00549a;&#13;
+$link-color: #00549a;&#13;
+$text-color: #1b2733;&#13;
+$body-bg: #ffffff;&#13;
+$font-family-sans-serif: Arial, "Helvetica Neue", Helvetica, sans-serif;</css_variables>
+        <footer/>
+        <footer_fixed>false</footer_fixed>
+        <header display_value="BCE Header">0aa962a7937b4310ca89f6718bba10f8</header>
+        <icon/>
+        <logo/>
+        <logo_alt_text/>
+        <matching_now_experience_theme/>
+        <name>BCE Global Tech</name>
+        <navbar_fixed>false</navbar_fixed>
+        <sys_class_name>sp_theme</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-10-14 08:30:26</sys_created_on>
+        <sys_id>011a22e7937b4310ca89f6718bba1056</sys_id>
+        <sys_mod_count>4</sys_mod_count>
+        <sys_name>BCE Global Tech</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sp_theme_011a22e7937b4310ca89f6718bba1056</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-10-19 23:08:30</sys_updated_on>
+        <turn_off_scss_compilation>false</turn_off_scss_compilation>
+    </sp_theme>
+    <sys_translated_text action="delete_multiple" query="documentkey=011a22e7937b4310ca89f6718bba1056"/>
+</record_update>

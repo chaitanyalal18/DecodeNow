@@ -1,0 +1,694 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sp_widget">
+    <sp_widget action="INSERT_OR_UPDATE">
+        <category>custom</category>
+        <client_script><![CDATA[api.controller = function($scope, $interval, $timeout, $window) {
+    /* Fun on PDI - Game master console */
+    var c = this;
+    var REFRESH_MS = 5000;
+
+    c.state = c.data.state;
+    c.puzzles = c.data.puzzles || [];
+    c.pick = activeId();
+    c.limit = c.state && c.state.ok ? c.state.puzzle.timeLimitMinutes : 45;
+    c.confirm = null;
+    c.busy = false;
+    c.message = '';
+    c.messageKind = '';
+    c.clockText = '';
+    c.confirmText = {
+        start: {
+            title: 'Start the game?',
+            body: 'Every registered team sees the crossword within a few seconds, and all timers start now.',
+            button: 'Yes, start now', btnClass: 'gm-btn-start'
+        },
+        end: {
+            title: 'End the game now?',
+            body: 'Every team still playing is submitted with what it has filled in and scored. The leaderboard shows the final results.',
+            button: 'Yes, end the game', btnClass: 'gm-btn-end'
+        },
+        switch: {
+            title: 'Switch game?',
+            body: '',
+            button: 'Yes, switch', btnClass: 'gm-btn-start'
+        },
+        reset: {
+            title: 'Reset everything?',
+            body: 'All teams, members, progress, answers and points are cleared. Every table goes back to team registration.',
+            button: 'Yes, reset everything', btnClass: 'gm-btn-danger'
+        }
+    };
+
+    var endAt = 0;
+    var refreshing = false;
+    var limitTouched = false;
+    var pickTouched = false;
+
+    function activeId() {
+        if (c.state && c.state.ok) return c.state.puzzle.id;
+        return c.puzzles.length ? c.puzzles[0].id : null;
+    }
+
+    c.pickChanged = function() { pickTouched = true; };
+
+    c.puzzleLabel = function(p) {
+        return p.name + ' (' + p.words + ' words)' + (p.active ? ', active' : '');
+    };
+
+    syncClock();
+    var poll = c.data.allowed ? $interval(refresh, REFRESH_MS) : null;
+    var tick = $interval(updateClock, 1000);
+    updateClock();
+
+    $scope.$watch(function() { return c.limit; }, function(v, old) { if (v !== old) limitTouched = true; });
+
+    function refresh() {
+        if (refreshing || c.busy) return;
+        refreshing = true;
+        c.server.get({ action: 'state' }).then(function(r) {
+            refreshing = false;
+            apply(r.data.state, r.data.puzzles);
+        }, function() { refreshing = false; });
+    }
+
+    function apply(state, puzzles) {
+        if (!state) return;
+        var oldId = c.state && c.state.ok ? c.state.puzzle.id : null;
+        var newId = state.ok ? state.puzzle.id : null;
+        if (oldId != newId) {               // switched game: forget the old answer key and time limit edits
+            c.solution = null;
+            c.showSolution = false;
+            limitTouched = false;
+        }
+        c.state = state;
+        if (puzzles) c.puzzles = puzzles;
+        if (!pickTouched || oldId != newId) { c.pick = activeId(); pickTouched = false; }
+        if (state.ok && !limitTouched) c.limit = state.puzzle.timeLimitMinutes;
+        syncClock();
+        updateClock();
+    }
+
+    function syncClock() {
+        var p = c.state && c.state.ok ? c.state.puzzle : null;
+        endAt = p && p.remainingSeconds !== null ? Date.now() + p.remainingSeconds * 1000 : 0;
+    }
+
+    function updateClock() {
+        if (!endAt) { c.clockText = ''; return; }
+        var sec = Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
+        var m = Math.floor(sec / 60), s = sec % 60;
+        c.clockText = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    }
+
+    c.stateKey = function() {
+        var p = c.state.puzzle;
+        if (p.state == 'ended') return 'ended';
+        if (p.state != 'running') return 'not_started';
+        return p.timeUp || c.clockText == '00:00' ? 'timeup' : 'running';
+    };
+
+    c.stateLabel = function() {
+        return { not_started: 'Not started', running: 'Running', timeup: "Time's up", ended: 'Ended' }[c.stateKey()];
+    };
+
+    c.statusLabel = function(t) {
+        if (t.status == 'submitted') {
+            return { auto: 'Submitted (time up)', ended: 'Submitted (game ended)' }[t.submitType] || 'Submitted';
+        }
+        return {
+            not_registered: 'Not registered',
+            waiting: 'Waiting',
+            not_opened: 'Not opened',
+            in_progress: 'Playing'
+        }[t.status] || t.status;
+    };
+
+    /* ---------- Start / End / Reset / time limit ---------- */
+
+    function pickedName() {
+        for (var i = 0; i < c.puzzles.length; i++) if (c.puzzles[i].id == c.pick) return c.puzzles[i].name;
+        return 'the selected game';
+    }
+
+    c.ask = function(what) {
+        if (what == 'switch') {
+            c.confirmText['switch'].body = 'Players, the console and the leaderboard will use "' + pickedName() +
+                '". Team registrations are kept; use Reset game if teams should register again.';
+        }
+        c.confirm = what;
+    };
+
+    c.run = function(what) {
+        c.confirm = null;
+        var payload = { action: what, puzzleId: c.state.ok ? c.state.puzzle.id : null, targetId: c.pick };
+        call(payload, {
+            start: 'The game has started. Teams will see the crossword within a few seconds.',
+            end: 'The game has ended. Final results are on the Leaderboard.',
+            reset: 'Everything was reset. Teams can register again.',
+            'switch': 'Switched to "' + pickedName() + '".'
+        }[what]);
+    };
+
+    /** Used when no game is active yet (no confirmation needed). */
+    c.activateNow = function() { c.run('switch'); };
+
+    c.saveLimit = function() {
+        call({ action: 'time_limit', puzzleId: c.state.puzzle.id, minutes: c.limit }, 'Time limit saved.');
+        limitTouched = false;
+    };
+
+    function call(payload, okText) {
+        c.busy = true;
+        c.message = '';
+        c.server.get(payload).then(function(r) {
+            c.busy = false;
+            var res = r.data.result;
+            if (res && res.ok) {
+                c.messageKind = 'ok';
+                c.message = okText;
+                $timeout(function() { if (c.message == okText) c.message = ''; }, 6000);
+            } else {
+                c.messageKind = 'err';
+                c.message = (res && res.message) || 'Something went wrong.';
+            }
+            apply(r.data.state, r.data.puzzles);
+        }, function() {
+            c.busy = false;
+            c.messageKind = 'err';
+            c.message = 'Could not reach the server.';
+        });
+    }
+
+
+    /* ---------- crisp board at any display scaling ----------
+     * Squares are sized to a whole number of screen pixels and lines are exactly
+     * 1 screen pixel (2 on high-density screens), so every grid line has the same
+     * thickness at 100%, 125%, 150% and 200% Windows/browser scaling. */
+    var BOARD_MAX_CELL = 35;   // CSS px at 100%
+    var BOARD_SIDE_SPACE = 120; // space the page needs around the board on small screens
+    c.cellPx = BOARD_MAX_CELL;
+    c.linePx = 1;
+    c.padPx = 10;
+
+    function sizeBoard() {
+        var cols = (c.solution ? c.solution.cols : 0);
+        if (!cols) return;
+        var dpr = $window.devicePixelRatio || 1;
+        var target = Math.min(BOARD_MAX_CELL, ($window.innerWidth - BOARD_SIDE_SPACE) / cols);
+        c.cellPx = Math.max(12, Math.floor(target * dpr)) / dpr;
+        c.linePx = Math.max(1, Math.round(dpr)) / dpr;
+        c.padPx = Math.round(10 * dpr) / dpr;
+    }
+
+    c.boardStyle = function() {
+        var px = function(v) { return (Math.round(v * 10000) / 10000) + 'px'; };
+        var cell = c.cellPx, line = c.linePx, pad = c.padPx;
+        // Everything is pre-computed here: the portal's SCSS compiler mangles calc() with
+        // CSS variable fallbacks, so the CSS only reads these plain values.
+        return '--cols: ' + (c.solution ? c.solution.cols : 0) +
+            '; --cell: ' + px(cell) +
+            '; --overlap: -' + px(line) +           // frame reaches one line into the next square
+            '; --line: ' + px(line) +
+            '; --pad: ' + px(pad) +
+            '; --pad-end: ' + px(pad + line) +
+            '; --num: ' + px(cell * 0.27) +
+            '; --letter: ' + px(cell * 0.56);
+    };
+
+    var onResize = function() { $scope.$applyAsync(sizeBoard); };
+    angular.element($window).on('resize', onResize);
+    $scope.$on('$destroy', function() { angular.element($window).off('resize', onResize); });
+
+    /* ---------- answer key ("Reveal answers") ---------- */
+    c.showSolution = false;
+    c.solution = null;
+    c.solutionLoading = false;
+
+    c.toggleSolution = function() {
+        if (c.showSolution) { c.showSolution = false; return; }
+        c.solutionLoading = true;
+        c.server.get({ action: 'solution', puzzleId: c.state.puzzle.id }).then(function(r) {
+            c.solutionLoading = false;
+            var res = r.data.solution;
+            if (!res || !res.ok) {
+                c.messageKind = 'err';
+                c.message = (res && res.message) || 'Could not load the answers.';
+                return;
+            }
+            c.solution = layout(res.words);
+            sizeBoard();
+            c.showSolution = true;
+        }, function() { c.solutionLoading = false; });
+    };
+
+    /** Same layout as the players' board: cropped to the words plus a 1-square margin. */
+    function layout(words) {
+        var minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+        words.forEach(function(w) {
+            minR = Math.min(minR, w.row); minC = Math.min(minC, w.col);
+            maxR = Math.max(maxR, w.direction == 'down' ? w.row + w.length - 1 : w.row);
+            maxC = Math.max(maxC, w.direction == 'across' ? w.col + w.length - 1 : w.col);
+        });
+        var rows = words.length ? maxR - minR + 3 : 0;
+        var cols = words.length ? maxC - minC + 3 : 0;
+        var cells = [];
+        for (var i = 0; i < rows * cols; i++) cells.push({ letter: '', number: null });
+        words.forEach(function(w) {
+            for (var j = 0; j < w.length; j++) {
+                var r = (w.direction == 'down' ? w.row + j : w.row) - minR + 1;
+                var col = (w.direction == 'across' ? w.col + j : w.col) - minC + 1;
+                if (cells[r * cols + col]) cells[r * cols + col].letter = w.answer.charAt(j) || '?';
+            }
+            var start = cells[(w.row - minR + 1) * cols + (w.col - minC + 1)];
+            if (start) start.number = w.number;
+        });
+        return {
+            cols: cols,
+            cells: cells,
+            across: words.filter(function(w) { return w.direction == 'across'; }),
+            down: words.filter(function(w) { return w.direction == 'down'; })
+        };
+    }
+
+    $scope.$on('$destroy', function() {
+        if (poll) $interval.cancel(poll);
+        $interval.cancel(tick);
+    });
+};]]></client_script>
+        <controller_as>c</controller_as>
+        <css>/* Fun on PDI - Game master console (BCE Global Tech palette) */&#13;
+.gm {&#13;
+  --brand: #00549a;&#13;
+  --brand-dark: #003778;&#13;
+  --ink: #1b2733;&#13;
+  --muted: #5b6878;&#13;
+  --surface: #f2f6fa;&#13;
+  --line: #d5dee8;&#13;
+  --green: #167a4e;&#13;
+  --amber: #a86400;&#13;
+  --red: #b3261e;&#13;
+  max-width: 1140px;&#13;
+  margin: 0 auto;&#13;
+  padding: 20px 12px 48px;&#13;
+  color: var(--ink);&#13;
+}&#13;
+.gm-empty { max-width: 520px; margin: 60px auto; padding: 24px; border: 2px solid var(--brand); border-radius: 8px; }&#13;
+&#13;
+/* hero */&#13;
+.gm-hero {&#13;
+  display: flex;&#13;
+  justify-content: space-between;&#13;
+  align-items: center;&#13;
+  gap: 24px;&#13;
+  flex-wrap: wrap;&#13;
+  padding: 24px;&#13;
+  border-radius: 8px;&#13;
+  background: var(--surface);&#13;
+  border-left: 8px solid var(--brand);&#13;
+}&#13;
+.gm-hero.is-running { border-left-color: var(--green); }&#13;
+.gm-hero.is-timeup { border-left-color: var(--red); }&#13;
+.gm-hero h1 { margin: 8px 0 4px; font-size: 28px; font-weight: 800; color: var(--brand-dark); }&#13;
+.gm-meta { margin: 0; color: var(--muted); }&#13;
+.gm-badge {&#13;
+  display: inline-block;&#13;
+  font-size: 12px;&#13;
+  font-weight: 800;&#13;
+  letter-spacing: 0.06em;&#13;
+  text-transform: uppercase;&#13;
+  padding: 4px 10px;&#13;
+  border-radius: 12px;&#13;
+  background: var(--brand);&#13;
+  color: #fff;&#13;
+}&#13;
+.is-running .gm-badge { background: var(--green); }&#13;
+.is-timeup .gm-badge { background: var(--red); }&#13;
+.gm-hero-side { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }&#13;
+.gm-clock {&#13;
+  font-size: 44px;&#13;
+  font-weight: 800;&#13;
+  font-variant-numeric: tabular-nums;&#13;
+  color: var(--brand-dark);&#13;
+  line-height: 1;&#13;
+}&#13;
+.is-timeup .gm-clock { color: var(--red); }&#13;
+.gm-controls { display: flex; flex-direction: column; gap: 10px; min-width: 220px; }&#13;
+.gm-label { font-size: 13px; font-weight: 700; margin: 0; }&#13;
+.gm-limit-row { display: flex; gap: 8px; }&#13;
+.gm-game { margin-top: 14px; }&#13;
+.gm-game-row { align-items: center; flex-wrap: wrap; }&#13;
+.gm-select { width: auto; min-width: 260px; max-width: 100%; background: #fff; }&#13;
+.gm-empty .gm-msg { margin-top: 12px; }&#13;
+.gm-field { width: 100px; font-size: 16px; padding: 6px 8px; border: 1px solid #b9c5d2; border-radius: 4px; }&#13;
+&#13;
+/* buttons */&#13;
+.gm-btn {&#13;
+  display: inline-block;&#13;
+  text-align: center;&#13;
+  font-size: 15px;&#13;
+  font-weight: 700;&#13;
+  padding: 10px 18px;&#13;
+  border-radius: 6px;&#13;
+  border: 2px solid transparent;&#13;
+  cursor: pointer;&#13;
+  text-decoration: none;&#13;
+}&#13;
+.gm-btn[disabled] { opacity: 0.55; cursor: default; }&#13;
+.gm-btn-start { background: var(--green); border-color: var(--green); color: #fff; font-size: 18px; padding: 12px 22px; }&#13;
+.gm-btn-start:hover { background: #0f5f3c; }&#13;
+.gm-btn-danger { background: #fff; border-color: var(--red); color: var(--red); }&#13;
+.gm-btn-danger:hover { background: var(--red); color: #fff; }&#13;
+.gm-modal .gm-btn-danger { background: var(--red); color: #fff; }&#13;
+.gm-btn-end { background: var(--brand); border-color: var(--brand); color: #fff; font-size: 18px; padding: 12px 22px; }&#13;
+.gm-btn-end:hover { background: var(--brand-dark); border-color: var(--brand-dark); }&#13;
+.gm-hero.is-ended { border-left-color: var(--brand-dark); }&#13;
+.is-ended .gm-badge { background: var(--brand-dark); }&#13;
+.gm-modal.is-end { border-top-color: var(--brand); }&#13;
+.gm-btn-ghost { background: #fff; border-color: var(--brand); color: var(--brand); }&#13;
+.gm-btn-ghost:hover, .gm-btn-ghost:focus { background: var(--brand); color: #fff; text-decoration: none; }&#13;
+.gm-btn:focus-visible { outline: 3px solid #9fd0ff; outline-offset: 2px; }&#13;
+&#13;
+/* messages and checks */&#13;
+.gm-msg { margin-top: 14px; padding: 12px 16px; border-radius: 6px; font-weight: 700; }&#13;
+.gm-msg.is-ok { background: #e3f4ea; color: #0f5a37; }&#13;
+.gm-msg.is-err { background: #fbe9e8; color: var(--red); }&#13;
+.gm-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }&#13;
+.gm-check { padding: 12px 16px; border-radius: 6px; border: 1px solid var(--line); }&#13;
+.gm-check.is-ok { background: #f1faf4; border-color: #b9e2c9; }&#13;
+.gm-check.is-warn { background: #fff7e8; border-color: #f0c977; }&#13;
+.gm-check.is-bad { background: #fbe9e8; border-color: #efb3ae; }&#13;
+.gm-check ul { margin: 6px 0 0 18px; padding: 0; }&#13;
+&#13;
+/* stats */&#13;
+.gm-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }&#13;
+.gm-stat {&#13;
+  padding: 14px 16px;&#13;
+  border: 1px solid var(--line);&#13;
+  border-radius: 6px;&#13;
+  color: var(--muted);&#13;
+  font-size: 14px;&#13;
+}&#13;
+.gm-stat span { display: block; font-size: 28px; font-weight: 800; color: var(--brand-dark); }&#13;
+&#13;
+/* teams */&#13;
+.gm-teams h2 { font-size: 20px; font-weight: 800; margin: 28px 0 10px; color: var(--brand-dark); }&#13;
+.gm-teams h2 small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 8px; }&#13;
+.gm-table-wrap { overflow-x: auto; }&#13;
+.gm-table { width: 100%; border-collapse: collapse; font-size: 14px; }&#13;
+.gm-table th {&#13;
+  text-align: left;&#13;
+  background: var(--brand);&#13;
+  color: #fff;&#13;
+  padding: 8px 10px;&#13;
+  font-weight: 700;&#13;
+  white-space: nowrap;&#13;
+}&#13;
+.gm-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }&#13;
+.gm-table tbody tr:nth-child(even) td { background: #fafcfe; }&#13;
+.gm-login { font-family: Consolas, Menlo, monospace; color: var(--muted); }&#13;
+.gm-members { max-width: 260px; color: var(--muted); }&#13;
+.gm-status { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }&#13;
+.gm-status.is-not_registered { background: #eef1f4; color: var(--muted); }&#13;
+.gm-status.is-waiting, .gm-status.is-not_opened { background: #e6eef7; color: var(--brand); }&#13;
+.gm-status.is-in_progress { background: #fff3dc; color: var(--amber); }&#13;
+.gm-status.is-submitted { background: #e3f4ea; color: var(--green); }&#13;
+.gm-bar { width: 120px; height: 10px; border-radius: 5px; background: #e6eef7; overflow: hidden; }&#13;
+.gm-bar span { display: block; height: 100%; background: var(--brand); }&#13;
+&#13;
+/* confirmation */&#13;
+.gm-backdrop {&#13;
+  position: fixed;&#13;
+  inset: 0;&#13;
+  z-index: 1050;&#13;
+  background: rgba(0, 55, 120, 0.45);&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  justify-content: center;&#13;
+  padding: 16px;&#13;
+}&#13;
+.gm-modal { background: #fff; border-radius: 8px; padding: 22px 24px; max-width: 440px; width: 100%; border-top: 6px solid var(--green); }&#13;
+.gm-modal.is-danger { border-top-color: var(--red); }&#13;
+.gm-modal h2 { margin: 0 0 8px; font-size: 20px; font-weight: 800; }&#13;
+.gm-modal p { margin: 0 0 18px; color: var(--muted); }&#13;
+.gm-modal-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }&#13;
+&#13;
+@media (max-width: 760px) {&#13;
+  .gm-stats { grid-template-columns: 1fr 1fr; }&#13;
+  .gm-checks { grid-template-columns: 1fr; }&#13;
+  .gm-clock { font-size: 34px; }&#13;
+}&#13;
+&#13;
+/* answer key */&#13;
+.gm-solution { margin-top: 16px; }&#13;
+.gm-solution-body {&#13;
+  display: flex;&#13;
+  gap: 28px;&#13;
+  flex-wrap: wrap;&#13;
+  align-items: flex-start;&#13;
+  margin-top: 14px;&#13;
+  padding: 18px;&#13;
+  border: 1px solid var(--line);&#13;
+  border-radius: 8px;&#13;
+}&#13;
+/* same board as the players see */&#13;
+.gm-board {&#13;
+  flex: none;&#13;
+  position: relative;&#13;
+  z-index: 0;&#13;
+  display: grid;&#13;
+  grid-template-columns: repeat(var(--cols, 15), var(--cell, 35px));&#13;
+  grid-auto-rows: var(--cell, 35px);&#13;
+  background: #e9eff6;&#13;
+  border-radius: 8px;&#13;
+  padding: var(--pad, 10px) var(--pad-end, 11px) var(--pad-end, 11px) var(--pad, 10px);&#13;
+}&#13;
+.gm-sq {&#13;
+  position: relative;&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  justify-content: center;&#13;
+  background: #fff;&#13;
+  font-weight: 800;&#13;
+  font-size: var(--letter, 20px);&#13;
+  color: var(--ink);&#13;
+}&#13;
+.gm-sq::after {&#13;
+  content: "";&#13;
+  position: absolute;&#13;
+  top: 0;&#13;
+  left: 0;&#13;
+  right: var(--overlap, -1px);&#13;
+  bottom: var(--overlap, -1px);&#13;
+  border: var(--line, 1px) solid #00549a;&#13;
+  pointer-events: none;&#13;
+  z-index: 1;&#13;
+}&#13;
+.gm-sq.is-block { background: transparent; }&#13;
+.gm-sq.is-block::after { display: none; }&#13;
+.gm-sq-num { position: absolute; z-index: 2; top: 1px; left: 2px; font-size: var(--num); line-height: 1; font-weight: 700; color: var(--ink); }&#13;
+.gm-key { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; flex: 1; min-width: 300px; }&#13;
+.gm-key h3 { margin: 0 0 6px; font-size: 16px; font-weight: 800; color: var(--brand-dark); }&#13;
+.gm-key ol { list-style: none; margin: 0; padding: 0; }&#13;
+.gm-key li { padding: 4px 0; line-height: 1.4; }&#13;
+.gm-key li b { color: var(--brand); display: inline-block; min-width: 20px; }&#13;
+.gm-key li strong { letter-spacing: 0.06em; margin-right: 6px; }&#13;
+.gm-key li span { color: var(--muted); font-size: 13px; }</css>
+        <data_table>sp_instance</data_table>
+        <demo_data/>
+        <description/>
+        <docs/>
+        <field_list/>
+        <has_preview>false</has_preview>
+        <id>fun-gm-console</id>
+        <internal>false</internal>
+        <link><![CDATA[function link(scope, element, attrs, controller) {
+  
+}]]></link>
+        <name>Game Master Console</name>
+        <option_schema/>
+        <public>false</public>
+        <roles>x_1802710_fun_on_0.game_master,x_1802710_fun_on_0.admin</roles>
+        <script><![CDATA[(function() {
+    /* Fun on PDI - Game master console (server script)
+     * input.action: 'state' (refresh), 'start', 'end', 'reset', 'time_limit', 'solution', 'switch'
+     */
+    data.allowed = gs.hasRole('x_1802710_fun_on_0.game_master');
+    if (!data.allowed) return;
+
+    var svc = new FunCrosswordService();
+
+    if (input && input.action) {
+        if (input.action == 'start') {
+            data.result = svc.startGame(input.puzzleId);
+        } else if (input.action == 'end') {
+            data.result = svc.endGame(input.puzzleId);
+        } else if (input.action == 'reset') {
+            data.result = svc.resetGame(input.puzzleId);
+        } else if (input.action == 'solution') {
+            data.solution = svc.getSolution(input.puzzleId);
+            return;
+        } else if (input.action == 'switch') {
+            data.result = svc.setActivePuzzle(input.targetId);
+        } else if (input.action == 'time_limit') {
+            data.result = svc.setTimeLimit(input.puzzleId, input.minutes);
+        }
+    }
+    data.state = svc.getConsoleState();
+    data.puzzles = svc.listPuzzles();
+})();]]></script>
+        <servicenow>false</servicenow>
+        <sys_class_name>sp_widget</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-10-14 12:30:37</sys_created_on>
+        <sys_id>e7f0efe793ff4310ca89f6718bba10e7</sys_id>
+        <sys_mod_count>7</sys_mod_count>
+        <sys_name>Game Master Console</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sp_widget_e7f0efe793ff4310ca89f6718bba10e7</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-10-16 05:46:23</sys_updated_on>
+        <template><![CDATA[<div class="gm">
+
+  <div class="gm-empty" ng-if="!c.data.allowed">
+    <h2>Game masters only</h2>
+    <p>You need the game master role to use this console.</p>
+  </div>
+
+  <div ng-if="c.data.allowed && c.state && !c.state.ok" class="gm-empty">
+    <h2>No active game</h2>
+    <p ng-if="!c.puzzles.length">{{c.state.message}}</p>
+    <div ng-if="c.puzzles.length">
+      <label class="gm-label" for="gm-game-empty">Choose the game to activate</label>
+      <div class="gm-limit-row gm-game-row">
+        <select id="gm-game-empty" class="gm-field gm-select" ng-model="c.pick" ng-change="c.pickChanged()"
+                ng-options="p.id as c.puzzleLabel(p) for p in c.puzzles"></select>
+        <button type="button" class="gm-btn gm-btn-start" ng-click="c.activateNow()" ng-disabled="c.busy || !c.pick">Activate</button>
+      </div>
+    </div>
+    <div class="gm-msg" ng-if="c.message" ng-class="'is-' + c.messageKind" role="status">{{c.message}}</div>
+  </div>
+
+  <div ng-if="c.data.allowed && c.state.ok">
+
+    <!-- Game status and controls -->
+    <section class="gm-hero" ng-class="'is-' + c.stateKey()">
+      <div class="gm-hero-main">
+        <span class="gm-badge">{{c.stateLabel()}}</span>
+        <h1>{{c.state.puzzle.name}}</h1>
+        <div class="gm-game" ng-if="c.state.puzzle.state != 'running' && c.puzzles.length > 1">
+          <label class="gm-label" for="gm-game">Game</label>
+          <div class="gm-limit-row gm-game-row">
+            <select id="gm-game" class="gm-field gm-select" ng-model="c.pick" ng-change="c.pickChanged()"
+                    ng-options="p.id as c.puzzleLabel(p) for p in c.puzzles"></select>
+            <button type="button" class="gm-btn gm-btn-ghost" ng-click="c.ask('switch')"
+                    ng-disabled="c.busy || c.pick == c.state.puzzle.id">Switch</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="gm-hero-side">
+        <div class="gm-clock" ng-if="c.state.puzzle.state == 'running'" role="timer">{{c.clockText}}</div>
+
+        <div class="gm-controls" ng-if="c.state.puzzle.state == 'not_started'">
+          <label class="gm-label" for="gm-limit">Time limit (minutes)</label>
+          <div class="gm-limit-row">
+            <input id="gm-limit" class="gm-field" type="number" min="1" max="240" ng-model="c.limit">
+            <button type="button" class="gm-btn gm-btn-ghost" ng-click="c.saveLimit()"
+                    ng-disabled="c.busy || c.limit == c.state.puzzle.timeLimitMinutes">Save</button>
+          </div>
+          <button type="button" class="gm-btn gm-btn-start" ng-click="c.ask('start')" ng-disabled="c.busy">Start game</button>
+        </div>
+
+        <div class="gm-controls" ng-if="c.state.puzzle.state == 'running'">
+          <button type="button" class="gm-btn gm-btn-end" ng-click="c.ask('end')" ng-disabled="c.busy">End game</button>
+          <button type="button" class="gm-btn gm-btn-danger" ng-click="c.ask('reset')" ng-disabled="c.busy">Reset game</button>
+        </div>
+
+        <div class="gm-controls" ng-if="c.state.puzzle.state == 'ended'">
+          <button type="button" class="gm-btn gm-btn-danger" ng-click="c.ask('reset')" ng-disabled="c.busy">Reset game</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Answer key, laid out as the crossword -->
+    <section class="gm-solution">
+      <button type="button" class="gm-btn gm-btn-ghost" ng-click="c.toggleSolution()" ng-disabled="c.solutionLoading"
+              aria-expanded="{{c.showSolution}}" aria-controls="gm-solution-body">
+        {{c.solutionLoading ? 'Loading…' : (c.showSolution ? 'Hide answers' : 'Reveal answers')}}
+      </button>
+      <div id="gm-solution-body" class="gm-solution-body" ng-if="c.showSolution && c.solution">
+        <div class="gm-board" ng-attr-style="{{c.boardStyle()}}" role="img" aria-label="Crossword with the correct answers">
+          <div ng-repeat="cell in c.solution.cells track by $index" class="gm-sq" ng-class="{'is-block': !cell.letter}">
+            <span class="gm-sq-num" ng-if="cell.number">{{cell.number}}</span>{{cell.letter}}
+          </div>
+        </div>
+        <div class="gm-key">
+          <div>
+            <h3>Across</h3>
+            <ol><li ng-repeat="w in c.solution.across"><b>{{w.number}}</b> <strong>{{w.answer}}</strong> <span>{{w.clue}}</span></li></ol>
+          </div>
+          <div>
+            <h3>Down</h3>
+            <ol><li ng-repeat="w in c.solution.down"><b>{{w.number}}</b> <strong>{{w.answer}}</strong> <span>{{w.clue}}</span></li></ol>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="gm-msg" ng-if="c.message" ng-class="'is-' + c.messageKind" role="status">{{c.message}}</div>
+
+
+
+    <!-- Teams -->
+    <section class="gm-teams">
+      <h2>Teams</h2>
+      <div class="gm-table-wrap">
+        <table class="gm-table">
+          <thead>
+            <tr>
+              <th scope="col">Login</th>
+              <th scope="col">Team</th>
+              <th scope="col">Members</th>
+              <th scope="col">Status</th>
+              <th scope="col">Progress</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr ng-repeat="t in c.state.teams track by t.login">
+              <td class="gm-login">{{t.login}}</td>
+              <td><strong>{{t.name}}</strong></td>
+              <td class="gm-members">{{t.members || '-'}}</td>
+              <td><span class="gm-status" ng-class="'is-' + t.status">{{c.statusLabel(t)}}</span></td>
+              <td>
+                <div class="gm-bar" ng-if="t.status == 'in_progress' || t.status == 'submitted'"
+                     title="{{t.filled}} of {{t.totalCells}} squares filled">
+                  <span ng-style="{width: (t.totalCells ? (100 * t.filled / t.totalCells) : 0) + '%'}"></span>
+                </div>
+                <span ng-if="t.status != 'in_progress' && t.status != 'submitted'">-</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Confirmation -->
+    <div class="gm-backdrop" ng-if="c.confirm">
+      <div class="gm-modal" role="dialog" aria-modal="true" aria-labelledby="gm-modal-title"
+           ng-class="{'is-danger': c.confirm == 'reset', 'is-end': c.confirm == 'end'}">
+        <h2 id="gm-modal-title">{{c.confirmText[c.confirm].title}}</h2>
+        <p>{{c.confirmText[c.confirm].body}}</p>
+        <p ng-if="c.confirm == 'start'">{{c.state.counts.registered}} of {{c.state.counts.total}} teams have registered.</p>
+        <div class="gm-modal-actions">
+          <button type="button" class="gm-btn gm-btn-ghost" ng-click="c.confirm = null">Cancel</button>
+          <button type="button" class="gm-btn" ng-class="c.confirmText[c.confirm].btnClass"
+                  ng-click="c.run(c.confirm)">{{c.confirmText[c.confirm].button}}</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>]]></template>
+    </sp_widget>
+</record_update>
