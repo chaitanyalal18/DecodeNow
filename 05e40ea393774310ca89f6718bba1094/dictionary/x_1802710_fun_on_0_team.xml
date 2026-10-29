@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?><database>
+    <element attributes="enforce_dot_walk_cross_scope_access=true" db_object_id="9a99ceeb93774310ca89f6718bba10c2" label="Team" max_length="40" name="x_1802710_fun_on_0_team" type="collection">
+        <element label="User" max_length="32" name="user" reference="sys_user" type="reference"/>
+        <element default="true" label="Active" max_length="40" name="active" type="boolean"/>
+        <element display="true" label="Name" max_length="100" name="name" type="string"/>
+        <element label="Registered" max_length="40" name="registered" type="boolean"/>
+        <element label="Members" max_length="500" name="members" type="string"/>
+        <index name="index">
+            <element name="user"/>
+        </index>
+    </element>
+</database>

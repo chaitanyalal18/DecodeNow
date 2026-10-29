@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update>
+    <sys_ui_list parent="" relationship="" sys_domain="global" table="x_1802710_fun_on_0_puzzle_word" version="2" view="">
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>clue</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>0</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>5b1e062793b74310ca89f6718bba1074</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>clue_number</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>1</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>1f1e0a2793b74310ca89f6718bba1057</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>direction</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>2</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>df1e0a2793b74310ca89f6718bba1057</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>hunt_type</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>3</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>931e0a2793b74310ca89f6718bba1058</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>location_note</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>4</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>571e0a2793b74310ca89f6718bba1058</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>puzzle</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>5</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>1b1e0a2793b74310ca89f6718bba1058</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>record_link</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>6</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>db1e0a2793b74310ca89f6718bba1058</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>start_col</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>7</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>9f1e0a2793b74310ca89f6718bba1058</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>start_row</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>8</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>531e0a2793b74310ca89f6718bba1059</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list_element action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element>word_length</element>
+            <list_id display_value="x_1802710_fun_on_0_puzzle_word" element="NULL" name="x_1802710_fun_on_0_puzzle_word" parent="NULL" relationship="NULL" sys_domain="global" view="Default view">5b1e062793b74310ca89f6718bba1073</list_id>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <position>9</position>
+            <sum>false</sum>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_id>171e0a2793b74310ca89f6718bba1059</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+        </sys_ui_list_element>
+        <sys_ui_list action="INSERT_OR_UPDATE">
+            <average_value>false</average_value>
+            <element/>
+            <max_value>false</max_value>
+            <min_value>false</min_value>
+            <name>x_1802710_fun_on_0_puzzle_word</name>
+            <parent/>
+            <position/>
+            <relationship/>
+            <sum>false</sum>
+            <sys_class_name>sys_ui_list</sys_class_name>
+            <sys_created_by>admin</sys_created_by>
+            <sys_created_on>2026-10-14 06:27:23</sys_created_on>
+            <sys_domain>global</sys_domain>
+            <sys_domain_path>/</sys_domain_path>
+            <sys_id>5b1e062793b74310ca89f6718bba1073</sys_id>
+            <sys_mod_count>0</sys_mod_count>
+            <sys_name>x_1802710_fun_on_0_puzzle_word</sys_name>
+            <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+            <sys_policy/>
+            <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+            <sys_update_name>sys_ui_list_x_1802710_fun_on_0_puzzle_word_null</sys_update_name>
+            <sys_updated_by>admin</sys_updated_by>
+            <sys_updated_on>2026-10-14 06:27:23</sys_updated_on>
+            <sys_user/>
+            <view display_value="Default view" name="NULL">Default view</view>
+            <view_name/>
+        </sys_ui_list>
+    </sys_ui_list>
+</record_update>

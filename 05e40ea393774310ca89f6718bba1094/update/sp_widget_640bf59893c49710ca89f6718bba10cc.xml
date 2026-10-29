@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sp_widget">
+    <sp_widget action="INSERT_OR_UPDATE">
+        <category>custom</category>
+        <client_script><![CDATA[api.controller=function() {
+  /* widget controller */
+  var c = this;
+};]]></client_script>
+        <controller_as>c</controller_as>
+        <css>/* BCE Global Tech login page for the Fun on Platform portals */&#13;
+.bce-login {&#13;
+  min-height: 70vh;&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  justify-content: center;&#13;
+  padding: 40px 16px;&#13;
+  background: linear-gradient(180deg, #e9eff6 0%, #ffffff 70%);&#13;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;&#13;
+  color: #1b2733;&#13;
+}&#13;
+.bce-login-card {&#13;
+  width: 100%;&#13;
+  max-width: 420px;&#13;
+  background: #fff;&#13;
+  border-radius: 10px;&#13;
+  border-top: 6px solid #00549a;&#13;
+  box-shadow: 0 10px 30px rgba(0, 55, 120, 0.15);&#13;
+  padding: 32px 32px 24px;&#13;
+  text-align: center;&#13;
+}&#13;
+&#13;
+/* logo slot */&#13;
+.bce-login-logo { display: flex; justify-content: center; margin-bottom: 24px; }&#13;
+.bce-login-logo img { max-width: 240px; max-height: 80px; width: auto; height: auto; background: #00549a; }&#13;
+.bce-login-logo-placeholder {&#13;
+  width: 240px;&#13;
+  height: 80px;&#13;
+  border: 2px dashed #9db8d6;&#13;
+  border-radius: 8px;&#13;
+  background: #00549a;&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  justify-content: center;&#13;
+  color: #5b6878;&#13;
+  font-weight: 700;&#13;
+  letter-spacing: 0.08em;&#13;
+  text-transform: uppercase;&#13;
+  font-size: 13px;&#13;
+}&#13;
+&#13;
+/* restyle the embedded platform Login widget */&#13;
+.bce-login-form { text-align: left; }&#13;
+.bce-login-form .panel,&#13;
+.bce-login-form .panel-body { border: 0; box-shadow: none; background: transparent; padding: 0; margin: 0; }&#13;
+.bce-login-form .panel-heading,&#13;
+.bce-login-form h2,&#13;
+.bce-login-form h3,&#13;
+.bce-login-form h4 { display: none; }            /* the logo heads the card instead */&#13;
+.bce-login-form label { font-weight: 700; font-size: 13px; color: #1b2733; }&#13;
+.bce-login-form .form-control {&#13;
+  height: 42px;&#13;
+  border-radius: 6px;&#13;
+  border: 1px solid #b9c5d2;&#13;
+  box-shadow: none;&#13;
+  font-size: 15px;&#13;
+}&#13;
+.bce-login-form .form-control:focus { border-color: #00549a; box-shadow: 0 0 0 3px rgba(0, 84, 154, 0.2); }&#13;
+.bce-login-form .btn-primary,&#13;
+.bce-login-form button[type="submit"] {&#13;
+  width: 100%;&#13;
+  height: 44px;&#13;
+  border-radius: 6px;&#13;
+  background: #00549a;&#13;
+  border-color: #00549a;&#13;
+  font-weight: 700;&#13;
+  font-size: 16px;&#13;
+}&#13;
+.bce-login-form .btn-primary:hover,&#13;
+.bce-login-form .btn-primary:focus { background: #003778; border-color: #003778; }&#13;
+.bce-login-form a { color: #00549a; }&#13;
+&#13;
+.bce-login-help { margin: 20px 0 0; font-size: 13px; color: #5b6878; }&#13;
+&#13;
+@media (max-width: 480px) {&#13;
+  .bce-login-card { padding: 24px 20px 20px; }&#13;
+}</css>
+        <data_table>sp_instance</data_table>
+        <demo_data/>
+        <description/>
+        <docs/>
+        <field_list/>
+        <has_preview>false</has_preview>
+        <id>bce-login</id>
+        <internal>false</internal>
+        <link><![CDATA[function link(scope, element, attrs, controller) {
+  
+}]]></link>
+        <name>BCE Login</name>
+        <option_schema/>
+        <public>true</public>
+        <roles/>
+        <script><![CDATA[(function($sp) {
+    /* BCE Global Tech login page.
+     * Logo: upload an image in System UI > Images named "login_logo.png".
+     * (Created with the app selected it becomes "x_1802710_fun_on_0.login_logo.png"; both work.)
+     * Until then a "Logo" placeholder is shown. */
+    var LOGO_NAMES = ['x_1802710_fun_on_0.BCE_color_logo.png', 'login_logo.png'];
+
+    data.logo = '';
+    data.logoAlt = 'BCE Global Tech';
+    var img = new GlideRecord('db_image');
+    img.addQuery('name', 'IN', LOGO_NAMES.join(','));
+    img.orderByDesc('sys_updated_on');
+    img.setLimit(1);
+    img.query();
+    if (img.next()) data.logo = '/' + img.getValue('name');
+
+
+    data.help ='Sign in with the creditinals provided by game organiser';
+
+    // the platform's own Login widget handles authentication and the redirect after sign-in
+    data.loginWidget = $sp.getWidget('fun_pdi_login', {});
+})();]]></script>
+        <servicenow>false</servicenow>
+        <sys_class_name>sp_widget</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-10-16 13:00:52</sys_created_on>
+        <sys_id>640bf59893c49710ca89f6718bba10cc</sys_id>
+        <sys_mod_count>15</sys_mod_count>
+        <sys_name>BCE Login</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sp_widget_640bf59893c49710ca89f6718bba10cc</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-10-18 06:54:18</sys_updated_on>
+        <template><![CDATA[<div class="bce-login">
+  <div class="bce-login-card">
+
+    <!-- Logo slot: shows the uploaded image, or a placeholder until it is uploaded -->
+    <div class="bce-login-logo">
+      <img ng-if="data.logo" ng-src="{{data.logo}}" alt="{{data.logoAlt}}">
+      <div ng-if="!data.logo" class="bce-login-logo-placeholder" role="img" aria-label="Logo placeholder">
+        <span>Logo</span>
+      </div>
+    </div>
+
+    <!-- The platform's own Login widget does the actual sign-in -->
+    <div class="bce-login-form">
+      <sp-widget widget="data.loginWidget"></sp-widget>
+    </div>
+
+    <p class="bce-login-help">{{data.help}}</p>
+  </div>
+</div>]]></template>
+    </sp_widget>
+</record_update>

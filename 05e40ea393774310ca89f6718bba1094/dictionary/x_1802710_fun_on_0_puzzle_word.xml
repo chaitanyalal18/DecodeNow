@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?><database>
+    <element attributes="enforce_dot_walk_cross_scope_access=true" db_object_id="cd99caeb93774310ca89f6718bba10ea" label="Puzzle Word" max_length="40" name="x_1802710_fun_on_0_puzzle_word" type="collection">
+        <element label="Puzzle" max_length="32" name="puzzle" reference="x_1802710_fun_on_0_puzzle" type="reference"/>
+        <element label="Start column" max_length="40" name="start_col" type="integer"/>
+        <element label="Location note" max_length="200" name="location_note" type="string"/>
+        <element label="Clue number" max_length="40" name="clue_number" type="integer"/>
+        <element display="true" label="Clue" max_length="1000" name="clue" type="string"/>
+        <element label="Record link" max_length="1024" name="record_link" type="url"/>
+        <element label="Start row" max_length="40" name="start_row" type="integer"/>
+        <element choice="3" label="Hunt type" max_length="40" name="hunt_type" type="string">
+            <choice>
+                <element inactive_on_update="false" label="Script include" sequence="200" value="script_include"/>
+                <element inactive_on_update="false" label="Incident" sequence="500" value="incident"/>
+                <element inactive_on_update="false" label="Business rule" sequence="100" value="business_rule"/>
+                <element inactive_on_update="false" label="Client script" sequence="300" value="client_script"/>
+                <element inactive_on_update="false" label="UI policy" sequence="400" value="ui_policy"/>
+                <element inactive_on_update="false" label="Other" sequence="600" value="other"/>
+            </choice>
+        </element>
+        <element choice="3" label="Direction" max_length="40" name="direction" type="string">
+            <choice>
+                <element inactive_on_update="false" label="Down" sequence="200" value="down"/>
+                <element inactive_on_update="false" label="Across" sequence="100" value="across"/>
+            </choice>
+        </element>
+        <element label="Word length" max_length="40" name="word_length" type="integer"/>
+        <index name="index">
+            <element name="puzzle"/>
+        </index>
+    </element>
+</database>

@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sp_header_footer">
+    <sp_header_footer action="INSERT_OR_UPDATE">
+        <category>custom</category>
+        <client_script><![CDATA[api.controller = function($scope) {
+    /* BCE Global Tech header: switch to the team name as soon as the team registers */
+    var c = this;
+
+    // "Open ServiceNow Platform" appears when the crossword opens and hides once the team is done.
+    $scope.$on('fun.gameState', function(e, state) {
+        c.data.showPlatform = state == 'running';
+    });
+
+    $scope.$on('fun.teamRegistered', function(e, team) {
+        if (!team || !team.name) return;
+        c.data.displayName = team.name;
+        var parts = team.name.trim().split(/\s+/);
+        c.data.initials = parts.length > 1
+            ? (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase()
+            : parts[0].substring(0, 2).toUpperCase();
+    });
+};]]></client_script>
+        <controller_as>c</controller_as>
+        <css>/* BCE Global Tech header for the Fun on PDI portal */&#13;
+.bce-head {&#13;
+  font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;&#13;
+  color: #fff;&#13;
+}&#13;
+.bce-bar {&#13;
+  background: #00549a;&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  justify-content: space-between;&#13;
+  gap: 16px;&#13;
+  padding: 14px #{unquote("max(16px, calc((100% - 1140px) / 2))")};&#13;
+}&#13;
+.bce-brand {&#13;
+  display: flex;&#13;
+  align-items: baseline;&#13;
+  gap: 18px;&#13;
+  color: #fff;&#13;
+  text-decoration: none;&#13;
+}&#13;
+.bce-brand:hover,&#13;
+.bce-brand:focus { color: #fff; text-decoration: none; }&#13;
+/* The logo is blue and black, so it sits on a white chip to stay readable on the blue bar.&#13;
+   If you upload a white (reversed) logo instead, delete the background and padding below. */&#13;
+.bce-logo-chip {&#13;
+      display: inline-flex;&#13;
+      align-items: center;&#13;
+      align-self: center;&#13;
+}&#13;
+.bce-logo-img {&#13;
+  display: block;&#13;
+  height: 65px;&#13;
+  width: auto;&#13;
+}&#13;
+.bce-brand { align-items: center; }&#13;
+.bce-logo {&#13;
+  font-size: 28px;&#13;
+  letter-spacing: -0.5px;&#13;
+  font-weight: 300;&#13;
+  line-height: 1;&#13;
+  white-space: nowrap;&#13;
+}&#13;
+.bce-logo strong { font-weight: 800; }&#13;
+.bce-app {&#13;
+  font-size: 24px;&#13;
+  font-weight: 300;&#13;
+  padding-left: 18px;&#13;
+  border-left: 1px solid rgba(255, 255, 255, 0.45);&#13;
+  line-height: 1;&#13;
+}&#13;
+.bce-user {&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  gap: 10px;&#13;
+  font-size: 15px;&#13;
+}&#13;
+.bce-avatar {&#13;
+  width: 32px;&#13;
+  height: 32px;&#13;
+  border-radius: 50%;&#13;
+  background: #fff;&#13;
+  color: #00549a;&#13;
+  font-size: 12px;&#13;
+  font-weight: 700;&#13;
+  display: inline-flex;&#13;
+  align-items: center;&#13;
+  justify-content: center;&#13;
+}&#13;
+.bce-logout {&#13;
+  color: #fff;&#13;
+  border: 1px solid rgba(255, 255, 255, 0.6);&#13;
+  border-radius: 16px;&#13;
+  padding: 4px 12px;&#13;
+  font-size: 13px;&#13;
+}&#13;
+.bce-logout:hover,&#13;
+.bce-logout:focus { color: #00549a; background: #fff; text-decoration: none; }&#13;
+.bce-sub {&#13;
+  background: #003778;&#13;
+  display: flex;&#13;
+  align-items: center;&#13;
+  gap: 24px;&#13;
+  padding: 10px #{unquote("max(16px, calc((100% - 1140px) / 2))")};&#13;
+  font-size: 14px;&#13;
+}&#13;
+.bce-event { font-weight: 700; }&#13;
+.bce-app { white-space: nowrap; }&#13;
+.bce-sub a { color: #fff; opacity: 0.85; }&#13;
+.bce-sub a.is-current { opacity: 1; font-weight: 700; }&#13;
+.bce-sub a.bce-platform {&#13;
+  margin-left: auto;&#13;
+  opacity: 1;&#13;
+  font-weight: 700;&#13;
+  padding: 3px 12px;&#13;
+  border: 1px solid rgba(255, 255, 255, 0.6);&#13;
+  border-radius: 14px;&#13;
+}&#13;
+.bce-sub a.bce-platform:hover,&#13;
+.bce-sub a.bce-platform:focus { background: #fff; color: #003778; text-decoration: none; }&#13;
+.bce-sub a:focus-visible,&#13;
+.bce-logout:focus-visible,&#13;
+.bce-brand:focus-visible { outline: 2px solid #9fd0ff; outline-offset: 3px; }&#13;
+&#13;
+@media (max-width: 640px) {&#13;
+  .bce-logo { font-size: 22px; }&#13;
+  .bce-logo-img { height: 26px; }&#13;
+  .bce-app { font-size: 18px; padding-left: 12px; }&#13;
+  .bce-name { display: none; }&#13;
+}</css>
+        <data_table>sp_instance</data_table>
+        <demo_data/>
+        <description/>
+        <docs/>
+        <field_list/>
+        <has_preview>false</has_preview>
+        <id>bce-header</id>
+        <internal>false</internal>
+        <link><![CDATA[function link(scope, element, attrs, controller) {
+  
+}]]></link>
+        <name>BCE Header</name>
+        <option_schema/>
+        <public>false</public>
+        <roles/>
+        <script><![CDATA[(function() {
+    /* BCE Global Tech header: theme logo, signed-in team or user, current page */
+    data.loggedIn = gs.isLoggedIn();
+
+    // Same header on both portals: /fun (players) and /fun_gm (game masters).
+    var portalRec = $sp.getPortalRecord();
+    data.suffix = portalRec ? portalRec.getValue('url_suffix') : 'fun';
+    var isGameMaster = data.suffix == 'fun_gm';
+    data.home = isGameMaster ? 'fun_console' : 'crossword';
+    data.section = 'Fun on Platform';
+    data.nav = isGameMaster
+        ? [{ id: 'fun_console', label: 'Console' }, { id: 'fun_leaderboard', label: 'Leaderboard' }]
+        : [];
+    // Players hunt for the words in the platform UI, opened in a new tab so the crossword stays open.
+    // The link shows only while the game is running; the crossword widget updates it live.
+    data.platformUrl = isGameMaster ? '' : '/now/nav/ui/home';
+    data.showPlatform = false;
+    if (!isGameMaster) {
+        var pz = new GlideRecord('x_1802710_fun_on_0_puzzle');
+        pz.addActiveQuery();
+        pz.orderByDesc('sys_created_on');
+        pz.setLimit(1);
+        pz.query();
+        data.showPlatform = pz.next() && pz.getValue('game_state') == 'running';
+    }
+    data.page = $sp.getParameter('id') || data.home;
+
+    // Show the team name once the team has registered, otherwise the user name.
+    data.displayName = gs.getUserDisplayName();
+    var team = new GlideRecord('x_1802710_fun_on_0_team');
+    team.addQuery('user', gs.getUserID());
+    team.addActiveQuery();
+    team.setLimit(1);
+    team.query();
+    if (team.next()) {
+        var reg = String(team.getValue('registered'));
+        if (reg == '1' || reg == 'true') data.displayName = team.getValue('name');
+    }
+    data.initials = initialsOf(data.displayName);
+
+    // Logo: served from System UI > Images (db_image), which every signed-in user can read.
+    // The theme's Logo field is only a fallback (its download link is checked against theme access).
+    // Images created with the app selected get the scope prefix, so accept both names.
+    var LOGO_NAMES = ['x_1802710_fun_on_0.bce_logo_white.png', 'bce_logo.png'];
+    data.logoAlt = 'BCE Global Tech';
+    data.logo = '';
+    var img = new GlideRecord('db_image');
+    img.addQuery('name', 'IN', LOGO_NAMES.join(','));
+    img.orderByDesc('sys_updated_on');
+    img.setLimit(1);
+    img.query();
+    if (img.next()) {
+        data.logo = '/' + img.getValue('name');
+    } else {
+        var portal = $sp.getPortalRecord();
+        if (portal) {
+            var theme = portal.theme.getRefRecord();
+            if (theme && theme.isValidRecord()) data.logo = imageUrl('sp_theme', theme.getUniqueValue(), 'logo');
+        }
+    }
+
+    function imageUrl(table, sysId, field) {
+        var att = new GlideRecord('sys_attachment');
+        att.addQuery('table_name', 'ZZ_YY' + table);
+        att.addQuery('table_sys_id', sysId);
+        att.addQuery('file_name', field);
+        att.orderByDesc('sys_created_on');
+        att.setLimit(1);
+        att.query();
+        return att.next() ? '/sys_attachment.do?sys_id=' + att.getUniqueValue() : '';
+    }
+
+    function initialsOf(name) {
+        var parts = String(name || '').replace(/^\s+|\s+$/g, '').split(/\s+/);
+        if (parts.length > 1) return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+        return (parts[0] || '?').substring(0, 2).toUpperCase();
+    }
+})();]]></script>
+        <servicenow>false</servicenow>
+        <static>false</static>
+        <sys_class_name>sp_header_footer</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-10-14 08:28:48</sys_created_on>
+        <sys_id>0aa962a7937b4310ca89f6718bba10f8</sys_id>
+        <sys_mod_count>15</sys_mod_count>
+        <sys_name>BCE Header</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sp_header_footer_0aa962a7937b4310ca89f6718bba10f8</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-10-22 09:48:11</sys_updated_on>
+        <template><![CDATA[<header class="bce-head">
+  <div class="bce-bar">
+    <a class="bce-brand" href="?id={{data.home}}" aria-label="ServiceNow Tech Summit home">
+      <!-- Logo from the theme's Logo field; falls back to the text wordmark -->
+      <span class="bce-logo-chip" ng-if="data.logo">
+        <img class="bce-logo-img" ng-src="{{data.logo}}" alt="{{data.logoAlt}}">
+      </span>
+      <span class="bce-logo" ng-if="!data.logo"><strong>BCE</strong> Global Tech</span>
+      <span class="bce-app">ServiceNow Tech Summit</span>
+    </a>
+    <div class="bce-user" ng-if="data.loggedIn">
+      <span class="bce-avatar" aria-hidden="true">{{data.initials}}</span>
+      <span class="bce-name">{{data.displayName}}</span>
+      <a class="bce-logout" href="/logout.do?sysparm_goto_url=/fun">Log out</a>
+    </div>
+  </div>
+  <nav class="bce-sub" aria-label="Fun on Platform">
+    <span class="bce-event">{{data.section}}</span>
+    <a ng-repeat="n in data.nav" href="?id={{n.id}}" ng-class="{'is-current': data.page == n.id}">{{n.label}}</a>
+    <a class="bce-platform" ng-if="data.platformUrl && data.showPlatform" href="{{data.platformUrl}}" target="_blank" rel="noopener">
+      Open ServiceNow Platform<span class="sr-only"> (opens in a new tab)</span> &#8599;
+    </a>
+  </nav>
+</header>]]></template>
+    </sp_header_footer>
+</record_update>
