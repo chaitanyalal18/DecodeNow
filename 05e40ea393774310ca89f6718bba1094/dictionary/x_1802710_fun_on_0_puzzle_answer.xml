@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?><database>
     <element attributes="enforce_dot_walk_cross_scope_access=true" db_object_id="0699ceeb93774310ca89f6718bba1032" label="Puzzle Answer" max_length="40" name="x_1802710_fun_on_0_puzzle_answer" type="collection">
         <element display="true" label="Word" max_length="32" name="word" reference="x_1802710_fun_on_0_puzzle_word" type="reference" unique="true"/>
+        <element calculation="(function calculatedFieldValue(current) {&#13;&#10;&#13;&#10;&#9;// Add your code here&#13;&#10;&#9;return current.word.puzzle;  // return the calculated value&#13;&#10;&#13;&#10;})(current);" label="Puzzle" max_length="40" name="puzzle" reference="x_1802710_fun_on_0_puzzle" type="reference" virtual="true"/>
         <element label="Answer" max_length="40" name="answer" type="string"/>
         <index name="index" unique="true">
             <element name="word"/>
