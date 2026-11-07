@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_script_fix">
+    <sys_script_fix action="INSERT_OR_UPDATE">
+        <before>false</before>
+        <description>Fun on platform</description>
+        <name>Setup players, roles and teams</name>
+        <record_for_rollback>true</record_for_rollback>
+        <script><![CDATA[(function executeFixScript() {
+
+    var GROUP_SYS_ID = 'f348795493c49710ca89f6718bba10aa';
+
+    var ROLES = [
+        'd1cc1050934c5710ca89f6718bba10c5',
+        '45e40ea393774310ca89f6718bba10a7'
+    ];
+
+    // Add roles to group
+    for (var r = 0; r < ROLES.length; r++) {
+
+        var grpRole = new GlideRecord('sys_group_has_role');
+        grpRole.addQuery('group', GROUP_SYS_ID);
+        grpRole.addQuery('role', ROLES[r]);
+        grpRole.query();
+
+        if (!grpRole.next()) {
+            grpRole.initialize();
+            grpRole.group = GROUP_SYS_ID;
+            grpRole.role = ROLES[r];
+            grpRole.insert();
+        }
+    }
+
+    // Create users and related records
+    for (var i = 1; i <= 12; i++) {
+
+        var username = 'table_' + i;
+        var password = 'Fun_table_' + i;
+        var userSysId;
+
+        var userGR = new GlideRecord('sys_user');
+        userGR.addQuery('user_name', username);
+        userGR.query();
+
+        if (userGR.next()) {
+            userSysId = userGR.getUniqueValue();
+        } else {
+
+            userGR.initialize();
+            userGR.first_name = 'Table';
+            userGR.last_name = String(i);
+            userGR.user_name = username;
+            userGR.active = true;
+
+            userSysId = userGR.insert();
+
+            // Set password
+            userGR.get(userSysId);
+            userGR.user_password.setDisplayValue(password);
+            userGR.update();
+        }
+
+        // Add user to group
+        var memberGR = new GlideRecord('sys_user_grmember');
+        memberGR.addQuery('user', userSysId);
+        memberGR.addQuery('group', GROUP_SYS_ID);
+        memberGR.query();
+
+        if (!memberGR.next()) {
+            memberGR.initialize();
+            memberGR.user = userSysId;
+            memberGR.group = GROUP_SYS_ID;
+            memberGR.insert();
+        }
+
+        // Create team record
+        var teamGR = new GlideRecord('x_1802710_fun_on_0_team');
+        teamGR.initialize();
+        teamGR.name = 'Table ' + i;
+        teamGR.user = userSysId;
+        teamGR.insert();
+    }
+
+    gs.info('Successfully created users, assigned passwords, added group memberships, roles, and team records.');
+
+})();]]></script>
+        <sys_class_name>sys_script_fix</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2026-11-07 10:28:44</sys_created_on>
+        <sys_id>545ba65393dc97d0ca89f6718bba10bc</sys_id>
+        <sys_mod_count>0</sys_mod_count>
+        <sys_name>Setup players, roles and teams</sys_name>
+        <sys_package display_value="Fun on PDI" source="x_1802710_fun_on_0">05e40ea393774310ca89f6718bba1094</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Fun on PDI">05e40ea393774310ca89f6718bba1094</sys_scope>
+        <sys_update_name>sys_script_fix_545ba65393dc97d0ca89f6718bba10bc</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2026-11-07 10:28:44</sys_updated_on>
+        <unloadable>false</unloadable>
+    </sys_script_fix>
+</record_update>
